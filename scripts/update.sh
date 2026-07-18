@@ -89,8 +89,16 @@ update_from_bundle() {
       /etc/systemd/system/fabric-agent.service
     systemctl daemon-reload
   fi
+}
 
-  # Expose the `fabric-agent` CLI wrapper so `fabric-agent update` works anywhere.
+install_cli_wrappers() {
+  # Install whichever operator CLIs are present so they're on PATH:
+  #   fabric        (management host)  -> sudo fabric update-nodes
+  #   fabric-agent  (node)             -> sudo fabric-agent update
+  if [[ -f "$PREFIX/scripts/fabric" ]]; then
+    chmod +x "$PREFIX/scripts/fabric"
+    ln -sf "$PREFIX/scripts/fabric" /usr/local/bin/fabric
+  fi
   if [[ -f "$PREFIX/scripts/fabric-agent" ]]; then
     chmod +x "$PREFIX/scripts/fabric-agent"
     ln -sf "$PREFIX/scripts/fabric-agent" /usr/local/bin/fabric-agent
@@ -121,6 +129,8 @@ else
   log "no git checkout — updating node from management plane bundle"
   update_from_bundle
 fi
+
+install_cli_wrappers
 
 restart_if_active "fabric-management.service" "$PREFIX/management/requirements.txt"
 restart_if_active "fabric-agent.service"      "$PREFIX/node-agent/requirements.txt"

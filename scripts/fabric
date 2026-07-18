@@ -9,6 +9,7 @@ set -euo pipefail
 SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
 PREFIX="$(cd "$(dirname "$SELF")/.." && pwd)"
 MGMT="$PREFIX/management"
+RUN_USER="${FABRIC_RUN_USER:-fabric}"
 
 if [[ ! -d "$MGMT/app" ]]; then
   echo "fabric: management app not found at $MGMT" >&2
@@ -20,4 +21,12 @@ cd "$MGMT"
 if [[ -f /etc/fabric/management.env ]]; then
   set -a; . /etc/fabric/management.env; set +a
 fi
+
+# Run as the management service user so we don't create root-owned SQLite
+# journal/WAL files under /var/lib/fabric (which would break the service). The
+# FABRIC_* config loaded above is preserved across the privilege drop.
+if [[ $EUID -eq 0 ]] && id "$RUN_USER" >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
+  exec runuser -u "$RUN_USER" -- python3 -m app.cli "$@"
+fi
+
 exec python3 -m app.cli "$@"
