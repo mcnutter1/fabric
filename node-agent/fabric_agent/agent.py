@@ -11,6 +11,7 @@ Lifecycle:
 """
 from __future__ import annotations
 
+import json
 import logging
 import platform
 import random
@@ -53,6 +54,7 @@ class FabricAgent:
         self.certs = CertManager(self)
         self.roles: list = []
         self._stop = threading.Event()
+        self._pending_update_result: Optional[dict] = None
 
     # ------------------------------------------------------------ setup
     def _connect(self, token: str = "") -> ManagerClient:
@@ -180,8 +182,13 @@ class FabricAgent:
             "roles": self.state.roles,
             "ts": int(time.time()),
         }
+        if self._pending_update_result:
+            health["update_result"] = self._pending_update_result
         try:
             resp = self.manager.heartbeat(__version__, health, self._link_stats())
+            if self._pending_update_result:
+                self._clear_update_result()
+                self._pending_update_result = None
             target = resp.get("target_version")
             if target and target != resp.get("config_version"):
                 # Manager indicates config drift; refresh on next tick.
@@ -190,6 +197,26 @@ class FabricAgent:
                 self._self_update()
         except Exception as e:  # noqa: BLE001
             log.warning("heartbeat failed: %s", e)
+
+    def _load_update_result(self) -> Optional[dict]:
+        """Read a self-update outcome left by the updater, to report once."""
+        path = self.cfg.state_dir / "last-update.json"
+        try:
+            if path.exists():
+                data = json.loads(path.read_text())
+                if not data.get("reported"):
+                    return data
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    def _clear_update_result(self) -> None:
+        path = self.cfg.state_dir / "last-update.json"
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _self_update(self) -> None:
         """Run the on-host updater (git pull + restart) when the manager asks."""
@@ -244,6 +271,8 @@ class FabricAgent:
             self.enroll()
 
         self.manager = self._connect(self.state.node_token)
+        # If we just came up from a self-update, report the outcome once.
+        self._pending_update_result = self._load_update_result()
         self.telemetry = TelemetryBuffer(
             flush_flows=lambda b: self.manager.report_flows(b),
             flush_dns=lambda b: self.manager.report_dns(b),

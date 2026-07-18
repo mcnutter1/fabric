@@ -194,6 +194,14 @@ else
 fi
 chown -R "$RUN_USER:$RUN_USER" /var/lib/fabric "$PREFIX"
 
+# --- management CLI ----------------------------------------------------
+# Expose the `fabric` operational CLI (e.g. `sudo fabric update-nodes`).
+if [[ -f "$PREFIX/scripts/fabric" ]]; then
+  chmod +x "$PREFIX/scripts/fabric"
+  ln -sf "$PREFIX/scripts/fabric" /usr/local/bin/fabric
+  step "installed 'fabric' CLI -> /usr/local/bin/fabric"
+fi
+
 # --- systemd -----------------------------------------------------------
 log "installing systemd unit"
 install -m 644 "$PREFIX/deploy/systemd/fabric-management.service" /etc/systemd/system/fabric-management.service

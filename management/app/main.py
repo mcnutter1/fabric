@@ -121,6 +121,52 @@ def create_app() -> FastAPI:
             headers={"Content-Disposition": "attachment; filename=fabric-node-agent.tar.gz"},
         )
 
+    # ---- One-line node updater: curl -fsSL <url>/install/update.sh | sudo bash ----
+    @app.get("/install/update.sh", response_class=PlainTextResponse)
+    async def install_update_sh():
+        base = settings.public_url.rstrip("/")
+        script = "\n".join([
+            "#!/usr/bin/env bash",
+            "# Fabric node updater — pulls the latest agent bundle from the",
+            "# management plane over HTTPS and restarts the service. Run as root:",
+            f"#   curl -fsSL {base}/install/update.sh | sudo bash",
+            "set -euo pipefail",
+            'PREFIX="/opt/fabric"',
+            f'BUNDLE_URL="{base}/install/node-agent.tar.gz"',
+            'log(){ echo -e "\\033[1;36m[fabric:update]\\033[0m $*"; }',
+            'die(){ echo -e "\\033[1;31m[fabric:error]\\033[0m $*" >&2; exit 1; }',
+            '[[ $EUID -eq 0 ]] || die "must run as root (use sudo)"',
+            'tarball="$(mktemp /tmp/fabric-bundle.XXXXXX.tar.gz)"',
+            'stage="$(mktemp -d /tmp/fabric-bundle.XXXXXX)"',
+            'trap \'rm -rf "$tarball" "$stage"\' EXIT',
+            'log "downloading node bundle from $BUNDLE_URL"',
+            'if command -v curl >/dev/null 2>&1; then',
+            '  curl -fsSL "$BUNDLE_URL" -o "$tarball" || die "download failed"',
+            'else',
+            '  wget -qO "$tarball" "$BUNDLE_URL" || die "download failed"',
+            'fi',
+            '[[ -s "$tarball" ]] || die "downloaded bundle is empty"',
+            'tar -xzf "$tarball" -C "$stage" || die "bundle is not a valid tar.gz"',
+            '[[ -f "$stage/node-agent/requirements.txt" ]] || die "bundle missing node-agent"',
+            'log "applying bundle to $PREFIX"',
+            'mkdir -p "$PREFIX"',
+            'cp -a "$stage"/. "$PREFIX"/',
+            'if [[ -f "$PREFIX/deploy/systemd/fabric-agent.service" ]]; then',
+            '  install -m 644 "$PREFIX/deploy/systemd/fabric-agent.service" /etc/systemd/system/fabric-agent.service',
+            '  systemctl daemon-reload',
+            'fi',
+            'PIP_FLAGS=()',
+            'if python3 -m pip install --help 2>/dev/null | grep -q break-system-packages; then',
+            '  PIP_FLAGS+=(--break-system-packages)',
+            'fi',
+            'python3 -m pip install -q "${PIP_FLAGS[@]}" -r "$PREFIX/node-agent/requirements.txt" || true',
+            'log "restarting fabric-agent"',
+            'systemctl restart fabric-agent.service',
+            'log "update complete"',
+            "",
+        ])
+        return PlainTextResponse(script, media_type="text/x-shellscript")
+
     # ---- One-line bootstrap: wget -qO- <url>/i/<code> | sudo bash ----
     @app.get("/i/{code}", response_class=PlainTextResponse)
     async def bootstrap_installer(code: str):

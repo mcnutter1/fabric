@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Fabric management CLI wrapper. Runs the in-process management CLI from the
+# installed management app. Installed to /usr/local/bin/fabric by
+# install-management.sh so operators can run e.g.:
+#   sudo fabric update-nodes
+set -euo pipefail
+
+# Resolve the repo/install root relative to this script (…/scripts/fabric).
+SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+PREFIX="$(cd "$(dirname "$SELF")/.." && pwd)"
+MGMT="$PREFIX/management"
+
+if [[ ! -d "$MGMT/app" ]]; then
+  echo "fabric: management app not found at $MGMT" >&2
+  exit 1
+fi
+
+cd "$MGMT"
+# Load management environment (DB URL, secrets) if present.
+if [[ -f /etc/fabric/management.env ]]; then
+  set -a; . /etc/fabric/management.env; set +a
+fi
+exec python3 -m app.cli "$@"

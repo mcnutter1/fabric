@@ -47,7 +47,30 @@ def _parse_args(argv=None) -> AgentConfig:
     return cfg
 
 
+def _run_update(argv) -> int:
+    """`fabric-agent update` — pull the latest bundle from the manager in-process."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-5s %(name)s: %(message)s",
+    )
+    from .updater import run_update
+    cfg = AgentConfig.from_env()
+    p = argparse.ArgumentParser("fabric-agent update",
+                                description="Update this node from the management plane")
+    p.add_argument("--manager", default=cfg.manager_url, help="management base URL")
+    p.add_argument("--no-verify-tls", action="store_true", help="disable manager TLS verification")
+    p.add_argument("--no-restart", action="store_true", help="apply the update but don't restart the service")
+    a = p.parse_args(argv)
+    cfg.manager_url = a.manager
+    if a.no_verify_tls:
+        cfg.verify_tls = False
+    return run_update(cfg, restart=not a.no_restart)
+
+
 def main(argv=None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "update":
+        return _run_update(args[1:])
     cfg = _parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if getattr(cfg, "_verbose", False) else logging.INFO,

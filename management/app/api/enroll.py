@@ -120,6 +120,22 @@ async def heartbeat(body: NodeHeartbeat, node: Node = Depends(require_node), db:
     if node.status in (NodeStatus.pairing.value, NodeStatus.pending.value, NodeStatus.offline.value):
         node.status = NodeStatus.online.value
 
+    now_epoch = int(utcnow().timestamp())
+    meta = dict(node.meta or {})
+    # Capture a self-update outcome the agent reports once after restarting.
+    result = (body.health or {}).get("update_result") if isinstance(body.health, dict) else None
+    if result:
+        upd = dict(meta.get("update") or {})
+        upd.update({
+            "state": "completed" if result.get("ok") else "failed",
+            "ok": bool(result.get("ok")),
+            "message": result.get("message", ""),
+            "to_version": result.get("version", "") or node.version,
+            "completed_at": now_epoch,
+        })
+        meta["update"] = upd
+        node.meta = meta
+
     # Update pairwise link stats.
     for link_stat in body.links:
         peer_id = link_stat.get("peer_id")
@@ -149,9 +165,14 @@ async def heartbeat(body: NodeHeartbeat, node: Node = Depends(require_node), db:
     # Tell the node whether it should re-pull config (version drift).
     cfg = FabricOrchestrator(db).compute_node_config(node)
     # Fire a one-time self-update signal if an operator requested it.
-    do_update = bool((node.meta or {}).get("update_requested"))
+    do_update = bool(meta.get("update_requested"))
     if do_update:
-        node.meta = {**(node.meta or {}), "update_requested": False}
+        upd = dict(meta.get("update") or {})
+        upd.update({"state": "dispatched", "dispatched_at": now_epoch,
+                    "from_version": node.version})
+        meta["update_requested"] = False
+        meta["update"] = upd
+        node.meta = meta
         db.commit()
     return {"ok": True, "config_version": cfg["version"],
             "target_version": node.target_version or node.version, "update": do_update}

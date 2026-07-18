@@ -81,6 +81,14 @@ update_from_bundle() {
   log "applying bundle to $PREFIX"
   mkdir -p "$PREFIX"
   cp -a "$stage"/. "$PREFIX"/
+
+  # Reinstall the systemd unit from the bundle so the node always runs the
+  # current unit (correct user/root + capabilities), not a stale one.
+  if [[ -f "$PREFIX/deploy/systemd/fabric-agent.service" ]]; then
+    install -m 644 "$PREFIX/deploy/systemd/fabric-agent.service" \
+      /etc/systemd/system/fabric-agent.service
+    systemctl daemon-reload
+  fi
 }
 
 restart_if_active() {

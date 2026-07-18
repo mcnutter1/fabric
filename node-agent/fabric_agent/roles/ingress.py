@@ -8,10 +8,21 @@ console can show live endpoint status and activity.
 """
 from __future__ import annotations
 
+import ipaddress
 import time
 
 from .base import Role
 from ..dns_filter import DNSResolver
+
+
+def _pool_gateway(cidr: str) -> str:
+    """First host of the endpoint pool (the gateway the ingress node owns)."""
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+        gw = next(net.hosts())
+        return f"{gw}/{net.prefixlen}"
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 class IngressRole(Role):
@@ -32,15 +43,28 @@ class IngressRole(Role):
             for e in (config.get("endpoints") or [])
             if e.get("public_key")
         }
+        # Own the endpoint pool gateway (e.g. 100.64.0.1) on our fabric
+        # interface so client tunnels have a reachable next hop AND the DNS
+        # resolver has a local address to bind. Without this the resolver's
+        # default bind address isn't assigned to the node and DNS logging (and
+        # thus per-endpoint query events) never start.
+        pool = (config.get("routing", {}) or {}).get("endpoint_pool")
+        gw_cidr = _pool_gateway(pool) if pool else ""
+        if gw_cidr:
+            try:
+                self.agent.dp.set_address(gw_cidr)
+            except Exception as e:  # noqa: BLE001
+                self.log.debug("could not assign pool gateway %s: %s", gw_cidr, e)
+            cfg.dns_listen = f"{gw_cidr.split('/')[0]}:53"
         if self.dns is None:
             self.dns = DNSResolver(cfg.dns_listen, cfg.upstream_dns,
                                    self.classifier, self.telemetry.add_dns)
             started = self.dns.start()
             # Expose on the agent so apply_policy() can push updates.
             self.agent.dns = self.dns
-            self.log.info("client ingress active (endpoint pool %s, dns=%s)",
+            self.log.info("client ingress active (endpoint pool %s, dns=%s @ %s)",
                           config.get("routing", {}).get("endpoint_pool"),
-                          "on" if started else "unavailable")
+                          "on" if started else "unavailable", cfg.dns_listen)
         if self.policy and self.dns:
             self.dns.set_policy(self.policy)
 

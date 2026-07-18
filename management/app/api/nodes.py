@@ -113,6 +113,31 @@ def issue_pairing(node_id: str, db: Session = Depends(get_db), admin: Principal 
     return PairingOut(code=code, expires_at=pairing.expires_at, install_command=install_cmd)
 
 
+@router.post("/update-all")
+def request_update_all(online: bool = Query(False), db: Session = Depends(get_db),
+                       admin: Principal = Depends(require_admin)):
+    """Flag every node (or only online ones) to self-update on next heartbeat.
+
+    Returns the set of nodes that were flagged so a CLI/console can track the
+    rollout and report per-node results as heartbeats come back in."""
+    q = select(Node)
+    if online:
+        q = q.where(Node.status == NodeStatus.online.value)
+    nodes = list(db.scalars(q.order_by(Node.name)))
+    now = int(utcnow().timestamp())
+    flagged = []
+    for node in nodes:
+        upd = dict((node.meta or {}).get("update") or {})
+        upd.update({"state": "requested", "requested_at": now, "from_version": node.version})
+        node.meta = {**(node.meta or {}), "update_requested": True, "update": upd}
+        flagged.append({"id": node.id, "name": node.name,
+                        "status": node.status, "version": node.version})
+    db.commit()
+    audit(db, actor=admin.email, actor_type="user", action="node.update_all",
+          target="*", detail={"count": len(flagged), "online_only": online})
+    return {"count": len(flagged), "nodes": flagged}
+
+
 @router.post("/{node_id}/update", response_model=NodeOut)
 def request_update(node_id: str, db: Session = Depends(get_db),
                    admin: Principal = Depends(require_admin)):
@@ -120,7 +145,10 @@ def request_update(node_id: str, db: Session = Depends(get_db),
     node = db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "node not found")
-    node.meta = {**(node.meta or {}), "update_requested": True}
+    now = int(utcnow().timestamp())
+    upd = dict((node.meta or {}).get("update") or {})
+    upd.update({"state": "requested", "requested_at": now, "from_version": node.version})
+    node.meta = {**(node.meta or {}), "update_requested": True, "update": upd}
     db.commit()
     db.refresh(node)
     audit(db, actor=admin.email, actor_type="user", action="node.update_requested", target=node_id)
