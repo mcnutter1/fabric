@@ -31,8 +31,11 @@ class DataPlane:
     def apply_wireguard(self, conf_path) -> None:
         """Bring up / sync the WireGuard interface from a wg-quick config file."""
         s = self.sys
-        # Create interface if missing.
-        s.run(["ip", "link", "add", "dev", self.iface, "type", "wireguard"])
+        # Create interface only if missing (avoids a noisy "File exists" warning
+        # on every reconfigure, since the interface persists across restarts).
+        existing = s.run(["ip", "link", "show", "dev", self.iface], capture=True)
+        if not existing:
+            s.run(["ip", "link", "add", "dev", self.iface, "type", "wireguard"])
         # Sync configuration (strip wg-quick-only keys for `wg setconf`).
         stripped = self._strip_for_setconf(conf_path)
         if stripped:
