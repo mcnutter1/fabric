@@ -28,10 +28,10 @@ class EgressRole(Role):
 
     def setup(self, config: dict) -> None:
         self.egress_ips = config.get("egress_ip_pool", []) or []
-        self.wan = self.dp.setup_egress(egress_ips=self.egress_ips)
         # Endpoint pools can be arbitrary operator CIDRs; register them so
         # client-originated connections aren't filtered out of flow telemetry.
         pools = list((config.get("routing", {}) or {}).get("endpoint_pools", []) or [])
+        self.wan = self.dp.setup_egress(egress_ips=self.egress_ips, src_cidrs=pools)
         self.observer.set_sources(pools)
         self.log.info("internet gateway active via %s (egress pool: %s)",
                       self.wan, self.egress_ips or "wan primary IP")

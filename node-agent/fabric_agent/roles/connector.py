@@ -43,7 +43,7 @@ class ConnectorRole(Role):
         if not self.cidrs:
             self.log.info("no private CIDRs assigned yet")
             return
-        self.dp.setup_connector(self.cidrs)
+        self.dp.setup_connector(self.cidrs, src_cidrs=pools)
         self.log.info("private connector active for %s", self.cidrs)
 
     def tick(self) -> None:

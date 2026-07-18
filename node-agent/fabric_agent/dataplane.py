@@ -94,36 +94,61 @@ class DataPlane:
         # flow/DNS telemetry is ever produced. Enable it on every node, not
         # just egress.
         self.enable_ip_forward()
+        iface = self.iface
 
-        # Ensure exactly one `ip rule` routes fabric-marked traffic via our
-        # table. `ip rule add` appends a fresh copy on every apply, so strip any
-        # existing duplicates first (this both fixes the leak and reconciles
-        # nodes that have accumulated hundreds of stale copies).
+        # --- Reconcile the policy-routing ip rules (idempotent) ------------
+        # `ip rule add` appends a fresh copy on every apply, so remove every
+        # rule we manage first (this both fixes the historic leak and heals
+        # nodes that accumulated hundreds of stale copies), then re-add exactly
+        # what the current config needs.
         existing = s.run(["ip", "rule", "show"], capture=True) or ""
-        dups = existing.count(f"fwmark {FWMARK} lookup {RT_TABLE}")
-        for _ in range(dups):
-            s.run(["ip", "rule", "del", "fwmark", FWMARK, "table", RT_TABLE])
-        s.run(["ip", "rule", "add", "fwmark", FWMARK, "table", RT_TABLE])
+        for _ in range(existing.count(f"lookup {RT_TABLE}")):
+            s.run(["ip", "rule", "del", "table", RT_TABLE])
+        for _ in range(existing.count("suppress_prefixlength 0")):
+            s.run(["ip", "rule", "del", "table", "main", "suppress_prefixlength", "0"])
 
-        # Flush our table so stale routes don't linger. Only flush when it
-        # actually has entries — flushing a table that was never populated
-        # errors noisily ("FIB table does not exist").
-        if (s.run(["ip", "route", "show", "table", RT_TABLE], capture=True) or "").strip():
-            s.run(["ip", "route", "flush", "table", RT_TABLE])
+        # --- Specific fabric prefixes go in the MAIN table ----------------
+        # Forwarded traffic (client -> connector, connector -> client, node ->
+        # node) is UNMARKED, so it is routed by the main table. The fwmark
+        # 0x51820 only tags WireGuard's own encrypted transport packets, so
+        # routes hidden in a fwmark-only table are never consulted for forwarded
+        # traffic — which is why nothing crossed the fabric. Point every
+        # fabric-served prefix (other connectors' private LANs and every ingress
+        # endpoint pool) at the fabric interface in main; WG cryptokey routing
+        # then hands each packet to the correct peer. These prefixes never match
+        # WG's own transport (peer endpoints are public IPs) so there is no
+        # routing loop. We skip our OWN endpoint pool: the ingress role already
+        # owns it as a connected route via the assigned pool gateway.
+        own_pool = routing.get("endpoint_pool")
+        prefixes: list[str] = []
+        for route in routing.get("private_routes", []) or []:
+            if route.get("cidr"):
+                prefixes.append(route["cidr"])
+        for pool in routing.get("endpoint_pools", []) or []:
+            if pool and pool != own_pool:
+                prefixes.append(pool)
+        seen: set = set()
+        for cidr in prefixes:
+            if cidr and cidr not in seen:
+                seen.add(cidr)
+                s.run(["ip", "route", "replace", cidr, "dev", iface])
 
+        # --- Internet default via the chosen egress peer ------------------
         egress = routing.get("egress")
         if egress and egress.get("peer_addr"):
-            # Default route -> egress peer over the fabric interface.
-            s.run(["ip", "route", "add", "default", "dev", self.iface, "table", RT_TABLE])
-
-        for route in routing.get("private_routes", []) or []:
-            cidr = route.get("cidr")
-            if cidr:
-                s.run(["ip", "route", "add", cidr, "dev", self.iface, "table", RT_TABLE])
-
-        pool = routing.get("endpoint_pool")
-        if pool:
-            s.run(["ip", "route", "add", pool, "dev", self.iface, "table", RT_TABLE])
+            # The default route lives in a dedicated table so the node's OWN
+            # encrypted WG packets (fwmark 0x51820) are not looped back into the
+            # tunnel. All other (unmarked) traffic uses the tunnel default,
+            # except specific main-table routes (LAN + fabric prefixes) which
+            # win via the suppress_prefixlength rule. This is the standard
+            # wg-quick full-tunnel policy-routing model.
+            s.run(["ip", "route", "replace", "default", "dev", iface, "table", RT_TABLE])
+            s.run(["ip", "rule", "add", "not", "fwmark", FWMARK, "table", RT_TABLE])
+            s.run(["ip", "rule", "add", "table", "main", "suppress_prefixlength", "0"])
+        elif (s.run(["ip", "route", "show", "table", RT_TABLE], capture=True) or "").strip():
+            # No egress assigned: drop any stale tunnel default so it can't
+            # black-hole traffic (and avoid the noisy flush of an empty table).
+            s.run(["ip", "route", "flush", "table", RT_TABLE])
 
     # ------------------------------------------------------------ NAT / gateway
     def enable_ip_forward(self) -> None:
@@ -164,18 +189,27 @@ class DataPlane:
         self.sys.run(["iptables", "-F", FAB_FWD])
 
     def setup_egress(self, wan: str = "", egress_ips: Optional[list] = None,
-                     src_cidr: str = FABRIC_CGNAT) -> str:
+                     src_cidr: str = FABRIC_CGNAT, src_cidrs: Optional[list] = None) -> str:
         """Program an internet-egress gateway.
 
         Forwards fabric-sourced traffic out `wan` and SNATs it. If an egress IP
         pool is supplied, connections are round-robined across those addresses
         (dynamic internet egress); otherwise MASQUERADE uses the WAN primary IP.
+
+        `src_cidrs` extends the SNATed source ranges beyond the CGNAT supernet to
+        cover operator-chosen endpoint pools (e.g. 10.10.120.0/24); without them
+        client-originated traffic leaves un-NATed and gets dropped.
         """
         s = self.sys
         wan = wan or self.wan_interface()
         self.enable_ip_forward()
         self._ensure_chains()
         self._flush_fabric_chains()
+
+        srcs: list[str] = []
+        for c in [src_cidr] + [x for x in (src_cidrs or []) if x]:
+            if c and c not in srcs:
+                srcs.append(c)
 
         # Forwarding: fabric -> internet and established back.
         s.run(["iptables", "-A", FAB_FWD, "-i", self.iface, "-o", wan, "-j", "ACCEPT"])
@@ -189,14 +223,16 @@ class DataPlane:
         if egress_ips:
             self.bind_egress_ips(egress_ips, wan)
             n = len(egress_ips)
-            for i, ip in enumerate(egress_ips):
-                # Round-robin new connections across the pool via the statistic module.
-                s.run(["iptables", "-t", "nat", "-A", FAB_POST, "-s", src_cidr, "-o", wan,
-                       "-m", "statistic", "--mode", "nth", "--every", str(n - i), "--packet", "0",
-                       "-j", "SNAT", "--to-source", ip])
+            for src in srcs:
+                for i, ip in enumerate(egress_ips):
+                    # Round-robin new connections across the pool via the statistic module.
+                    s.run(["iptables", "-t", "nat", "-A", FAB_POST, "-s", src, "-o", wan,
+                           "-m", "statistic", "--mode", "nth", "--every", str(n - i), "--packet", "0",
+                           "-j", "SNAT", "--to-source", ip])
         else:
-            s.run(["iptables", "-t", "nat", "-A", FAB_POST, "-s", src_cidr, "-o", wan, "-j", "MASQUERADE"])
-        log.info("egress gateway ready (wan=%s, egress_ips=%s)", wan, egress_ips or "masquerade")
+            for src in srcs:
+                s.run(["iptables", "-t", "nat", "-A", FAB_POST, "-s", src, "-o", wan, "-j", "MASQUERADE"])
+        log.info("egress gateway ready (wan=%s, egress_ips=%s, srcs=%s)", wan, egress_ips or "masquerade", srcs)
         return wan
 
     def bind_egress_ips(self, ips: list, wan: str) -> None:
@@ -205,17 +241,26 @@ class DataPlane:
             addr = ip if "/" in ip else f"{ip}/32"
             self.sys.run(["ip", "address", "replace", addr, "dev", wan])
 
-    def setup_connector(self, cidrs: list, wan: str = "") -> None:
+    def setup_connector(self, cidrs: list, wan: str = "", src_cidrs: Optional[list] = None) -> None:
         """Program a private-network connector (inbound + outbound).
 
         Fabric endpoints reach the private CIDRs (outbound) via SNAT onto the
         connector's private-side address; return + inbound-initiated flows to
         endpoints are allowed through established conntrack.
+
+        `src_cidrs` are the fabric source ranges to SNAT onto the private LAN.
+        The CGNAT supernet covers fabric node addrs, but client endpoints use
+        operator-chosen pool CIDRs (e.g. 10.10.120.0/24) that must be included
+        or their replies are black-holed by the private hosts.
         """
         s = self.sys
         wan = wan or self.wan_interface()
         self.enable_ip_forward()
         self._ensure_chains()
+        srcs: list[str] = []
+        for c in [FABRIC_CGNAT] + [x for x in (src_cidrs or []) if x]:
+            if c not in srcs:
+                srcs.append(c)
         for cidr in cidrs:
             if not cidr:
                 continue
@@ -224,9 +269,10 @@ class DataPlane:
             # Inbound: private -> fabric endpoints (established/related + initiated).
             s.run(["iptables", "-A", FAB_FWD, "-o", self.iface, "-s", cidr, "-j", "ACCEPT"])
             # SNAT fabric traffic onto the private network so hosts route replies back to us.
-            s.run(["iptables", "-t", "nat", "-A", FAB_POST, "-s", FABRIC_CGNAT, "-d", cidr,
-                   "-o", wan, "-j", "MASQUERADE"])
-        log.info("connector gateway ready (private_cidrs=%s wan=%s)", cidrs, wan)
+            for src in srcs:
+                s.run(["iptables", "-t", "nat", "-A", FAB_POST, "-s", src, "-d", cidr,
+                       "-o", wan, "-j", "MASQUERADE"])
+        log.info("connector gateway ready (private_cidrs=%s srcs=%s wan=%s)", cidrs, srcs, wan)
 
     def add_inbound_dnat(self, proto: str, dport: int, to_addr: str, wan: str = "") -> None:
         """Publish a private service inbound: WAN:dport -> fabric endpoint."""
