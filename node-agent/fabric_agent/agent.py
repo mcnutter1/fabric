@@ -202,6 +202,24 @@ class FabricAgent:
             self.telemetry.add_dns(sample_simulated_dns())
 
     # ------------------------------------------------------------ run loop
+    def _initial_sync(self) -> None:
+        """Pull config + policy once at startup, retrying instead of crashing.
+
+        A manager outage or TLS verification error must not kill the service:
+        we keep retrying with backoff so the heartbeat loop (and its self-update
+        handling) still comes up and the node can recover on its own.
+        """
+        delay = 5
+        while not self._stop.is_set():
+            try:
+                self.apply_config()
+                self.apply_policy()
+                return
+            except Exception as e:  # noqa: BLE001
+                log.warning("initial sync failed (%s); retrying in %ss", e, delay)
+                self._stop.wait(delay)
+                delay = min(delay * 2, 60)
+
     def run(self) -> None:
         if not self.cfg.manager_url:
             raise SystemExit("manager URL required (--manager or FABRIC_AGENT_MANAGER)")
@@ -216,8 +234,10 @@ class FabricAgent:
             flush_dns=lambda b: self.manager.report_dns(b),
         )
 
-        self.apply_config()
-        self.apply_policy()
+        # Initial config/policy sync. Retry with backoff instead of letting a
+        # transient manager outage or TLS error crash the process — otherwise
+        # systemd crash-loops and we never reach the heartbeat/self-update loop.
+        self._initial_sync()
 
         log.info("agent running (node=%s roles=%s sim=%s dry_run=%s)",
                  self.state.node_id, self.state.roles, self.cfg.simulate, self.cfg.dry_run)
