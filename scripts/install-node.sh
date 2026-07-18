@@ -100,13 +100,15 @@ else
 fi
 
 # --- python dependencies (system interpreter, no venv) -----------------
-# Respect PEP 668 "externally-managed" environments without a venv.
-PIP_FLAGS=(--upgrade)
+# Respect PEP 668 "externally-managed" environments without a venv. We do NOT
+# pass --upgrade: requirements use >= floors, so pip installs what's missing and
+# leaves already-satisfying (e.g. distro-provided) packages untouched — avoids
+# trying to uninstall Debian-managed packages that ship no RECORD file.
+PIP_FLAGS=()
 if python3 -m pip install --help 2>/dev/null | grep -q break-system-packages; then
   PIP_FLAGS+=(--break-system-packages)
 fi
 log "installing python dependencies (system-wide, no venv)"
-python3 -m pip install "${PIP_FLAGS[@]}" -q pip
 python3 -m pip install "${PIP_FLAGS[@]}" -q -r "$PREFIX/node-agent/requirements.txt"
 
 # --- state + config ----------------------------------------------------

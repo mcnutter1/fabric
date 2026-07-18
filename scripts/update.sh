@@ -33,11 +33,12 @@ restart_if_active() {
   local unit="$1" reqs="$2"
   if systemctl list-unit-files | grep -q "^$unit"; then
     log "refreshing deps for $unit"
-    local pip_flags=(--upgrade)
+    # No --upgrade: >= floors mean pip installs/upgrades only packages that don't
+    # already satisfy the requirement, leaving distro-managed packages alone.
+    local pip_flags=()
     if python3 -m pip install --help 2>/dev/null | grep -q break-system-packages; then
       pip_flags+=(--break-system-packages)
     fi
-    python3 -m pip install -q "${pip_flags[@]}" pip
     python3 -m pip install -q "${pip_flags[@]}" -r "$reqs"
     log "restarting $unit"
     systemctl restart "$unit"
