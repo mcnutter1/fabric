@@ -111,13 +111,20 @@ class FlowObserver:
             if not proto:
                 # protocol is usually the first word (proto num aside)
                 proto = parts[0] if parts[0] in ("tcp", "udp", "icmp") else ""
-            kvs = dict(_KV.findall(line))
-            # The first src/dst pair is the original direction; bytes appear per direction.
-            # conntrack -o extended emits bytes= for each tuple.
-            src = kvs.get("src", "")
-            dst = kvs.get("dst", "")
-            sport = kvs.get("sport", "0")
-            dport = kvs.get("dport", "0")
+            # A conntrack line carries TWO tuples: the original direction and the
+            # reply. Each has its own src=/dst=/sport=/dport=. dict() would keep the
+            # LAST (reply) tuple, whose src is the destination host — so a
+            # fabric-originated flow like src=10.10.120.3 dst=192.168.50.1 would be
+            # read back as src=192.168.50.1 and dropped by the _from_fabric() filter.
+            # Keep the FIRST occurrence of each key (the original direction).
+            first: dict[str, str] = {}
+            for k, v in _KV.findall(line):
+                if k not in first:
+                    first[k] = v
+            src = first.get("src", "")
+            dst = first.get("dst", "")
+            sport = first.get("sport", "0")
+            dport = first.get("dport", "0")
             # bytes: original then reply. re.findall grabs the first occurrence only,
             # so pull all byte counters explicitly.
             byte_vals = re.findall(r"bytes=(\d+)", line)
