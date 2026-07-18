@@ -105,8 +105,11 @@ class DataPlane:
             s.run(["ip", "rule", "del", "fwmark", FWMARK, "table", RT_TABLE])
         s.run(["ip", "rule", "add", "fwmark", FWMARK, "table", RT_TABLE])
 
-        # Flush our table so stale routes don't linger.
-        s.run(["ip", "route", "flush", "table", RT_TABLE])
+        # Flush our table so stale routes don't linger. Only flush when it
+        # actually has entries — flushing a table that was never populated
+        # errors noisily ("FIB table does not exist").
+        if (s.run(["ip", "route", "show", "table", RT_TABLE], capture=True) or "").strip():
+            s.run(["ip", "route", "flush", "table", RT_TABLE])
 
         egress = routing.get("egress")
         if egress and egress.get("peer_addr"):
