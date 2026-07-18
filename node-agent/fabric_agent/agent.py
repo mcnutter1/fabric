@@ -15,6 +15,7 @@ import logging
 import platform
 import random
 import socket
+import ssl
 import subprocess
 import threading
 import time
@@ -55,10 +56,21 @@ class FabricAgent:
 
     # ------------------------------------------------------------ setup
     def _connect(self, token: str = "") -> ManagerClient:
-        verify = self.cfg.verify_tls
-        if verify and self.cfg.manager_ca_file.exists():
-            verify = str(self.cfg.manager_ca_file)
-        return ManagerClient(self.cfg.manager_url, token=token, verify=verify)
+        if not self.cfg.verify_tls:
+            return ManagerClient(self.cfg.manager_url, token=token, verify=False)
+        # Trust the system CA store (the management plane is fronted by nginx
+        # with a public/Let's Encrypt cert) AND additively trust the fabric
+        # manager CA if present, so self-signed management deployments also work.
+        # The manager CA must never *replace* system trust, or a public cert on
+        # the management endpoint fails to verify after enrollment.
+        ctx = ssl.create_default_context()
+        ca = self.cfg.manager_ca_file
+        try:
+            if ca.exists() and ca.stat().st_size > 0:
+                ctx.load_verify_locations(str(ca))
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not load manager CA %s: %s", ca, e)
+        return ManagerClient(self.cfg.manager_url, token=token, verify=ctx)
 
     def _ensure_keys(self) -> None:
         if not self.state.wg_private_key:
