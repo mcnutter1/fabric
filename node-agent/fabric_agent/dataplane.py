@@ -87,7 +87,22 @@ class DataPlane:
         chosen egress peer; private CIDRs go via their connector peer.
         """
         s = self.sys
-        # Ensure the rule exists (route fabric-sourced traffic via our table).
+        # Every fabric node forwards packets between the tunnel and elsewhere
+        # (ingress: client -> fabric peer; connector: fabric -> private LAN;
+        # egress: fabric -> internet). Without this the kernel silently drops
+        # forwarded client traffic, so nothing traverses the fabric and no
+        # flow/DNS telemetry is ever produced. Enable it on every node, not
+        # just egress.
+        self.enable_ip_forward()
+
+        # Ensure exactly one `ip rule` routes fabric-marked traffic via our
+        # table. `ip rule add` appends a fresh copy on every apply, so strip any
+        # existing duplicates first (this both fixes the leak and reconciles
+        # nodes that have accumulated hundreds of stale copies).
+        existing = s.run(["ip", "rule", "show"], capture=True) or ""
+        dups = existing.count(f"fwmark {FWMARK} lookup {RT_TABLE}")
+        for _ in range(dups):
+            s.run(["ip", "rule", "del", "fwmark", FWMARK, "table", RT_TABLE])
         s.run(["ip", "rule", "add", "fwmark", FWMARK, "table", RT_TABLE])
 
         # Flush our table so stale routes don't linger.

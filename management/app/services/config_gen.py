@@ -3,13 +3,25 @@ from __future__ import annotations
 
 import base64
 import io
+import ipaddress
 from dataclasses import dataclass
 
 from ..models import Endpoint, Node
 from ..models.enums import EndpointProtocol, EndpointOS
 
 
-DNS_FABRIC = "100.64.0.1"  # ingress-side resolver (intercepted)
+DNS_FABRIC = "100.64.0.1"  # fallback resolver address if no pool is configured
+
+
+def _pool_gateway(cidr: str) -> str:
+    """First host of an ingress node's endpoint pool — the address its fabric
+    DNS resolver binds to and the one clients must query. Derived from the
+    node's pool so the client config always points at the real resolver."""
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+        return str(next(net.hosts()))
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 @dataclass
@@ -25,11 +37,15 @@ class EndpointBundle:
 
 def render_wireguard_conf(endpoint: Endpoint, ingress: Node, private_key: str) -> str:
     allowed = "0.0.0.0/0, ::/0"  # full-tunnel; policy steers on the fabric side
+    # The resolver binds to the ingress pool gateway (see the node's ingress
+    # role); the client must send DNS there, not a hardcoded address, or its
+    # queries hit an IP that isn't assigned to the node and get dropped.
+    dns = _pool_gateway(ingress.endpoint_pool_cidr or "") or DNS_FABRIC
     return "\n".join([
         "[Interface]",
         f"PrivateKey = {private_key}",
         f"Address = {endpoint.address}/32",
-        f"DNS = {DNS_FABRIC}",
+        f"DNS = {dns}",
         "",
         "[Peer]",
         f"PublicKey = {ingress.wg_public_key}",
