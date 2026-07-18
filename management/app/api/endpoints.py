@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 from ..auth import Principal, require_admin
 from ..database import get_db
 from ..models import Endpoint, Node, FlowRecord, DnsLog, AuditLog
+from ..models.endpoint import ProvisioningToken
 from ..models.enums import NodeRole, EndpointStatus, EndpointProtocol
-from ..schemas import EndpointCreate, EndpointOut, EndpointBundleOut
+from ..schemas import EndpointCreate, EndpointUpdate, EndpointOut, EndpointBundleOut
 from ..services import config_gen
 from ..services.pki import PKIService
 from ..services.wireguard import generate_keypair, generate_preshared_key, AddressAllocator
@@ -188,14 +189,51 @@ def endpoint_detail(endpoint_id: str, db: Session = Depends(get_db),
 
 
 
-@router.delete("/{endpoint_id}", status_code=204)
-def revoke_endpoint(endpoint_id: str, db: Session = Depends(get_db), admin: Principal = Depends(require_admin)):
+@router.patch("/{endpoint_id}", response_model=EndpointOut)
+def update_endpoint(endpoint_id: str, body: EndpointUpdate, db: Session = Depends(get_db),
+                    admin: Principal = Depends(require_admin)):
+    """Edit endpoint identity / posture. Network keys and address are managed by
+    the fabric and are not editable here."""
+    ep = db.get(Endpoint, endpoint_id)
+    if not ep:
+        raise HTTPException(404, "endpoint not found")
+    changes = body.model_dump(exclude_unset=True)
+    if "ingress_node_id" in changes and changes["ingress_node_id"]:
+        if not db.get(Node, changes["ingress_node_id"]):
+            raise HTTPException(404, "ingress node not found")
+    for field, value in changes.items():
+        setattr(ep, field, value)
+    db.commit()
+    db.refresh(ep)
+    audit(db, actor=admin.email, actor_type="user", action="endpoint.update",
+          target=endpoint_id, detail={"fields": list(changes.keys())})
+    return ep
+
+
+@router.post("/{endpoint_id}/revoke", status_code=204)
+def revoke_endpoint_post(endpoint_id: str, db: Session = Depends(get_db),
+                         admin: Principal = Depends(require_admin)):
+    """Revoke access without deleting the record (peer is dropped on next config)."""
     ep = db.get(Endpoint, endpoint_id)
     if not ep:
         raise HTTPException(404, "endpoint not found")
     ep.status = EndpointStatus.revoked.value
     db.commit()
     audit(db, actor=admin.email, actor_type="user", action="endpoint.revoke", target=endpoint_id)
+
+
+@router.delete("/{endpoint_id}", status_code=204)
+def delete_endpoint(endpoint_id: str, db: Session = Depends(get_db), admin: Principal = Depends(require_admin)):
+    """Permanently remove the endpoint and its provisioning tokens. The ingress
+    drops the WireGuard peer on its next config pull."""
+    ep = db.get(Endpoint, endpoint_id)
+    if not ep:
+        raise HTTPException(404, "endpoint not found")
+    for tok in db.scalars(select(ProvisioningToken).where(ProvisioningToken.endpoint_id == endpoint_id)):
+        db.delete(tok)
+    db.delete(ep)
+    db.commit()
+    audit(db, actor=admin.email, actor_type="user", action="endpoint.delete", target=endpoint_id)
 
 
 @router.get("/{endpoint_id}/config", response_model=EndpointBundleOut)

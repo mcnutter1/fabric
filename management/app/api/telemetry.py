@@ -31,6 +31,7 @@ async def ingest_flows(flows: list[FlowIngest], node: Node = Depends(require_nod
         e.address: e for e in db.scalars(select(Endpoint).where(Endpoint.address != ""))
     }
     stored = []
+    seen_eps: dict[str, Endpoint] = {}
     for f in flows:
         data = f.model_dump()
         if not data.get("endpoint_id") and data.get("src_ip"):
@@ -39,9 +40,21 @@ async def ingest_flows(flows: list[FlowIngest], node: Node = Depends(require_nod
                 data["endpoint_id"] = ep.id
                 if not data.get("user_uid"):
                     data["user_uid"] = ep.user_uid or ep.user_email
+        if data.get("endpoint_id"):
+            ep = ep_by_addr.get(data.get("src_ip")) or db.get(Endpoint, data["endpoint_id"])
+            if ep:
+                seen_eps[ep.id] = ep
         rec = FlowRecord(node_id=node.id, **data)
         db.add(rec)
         stored.append(data)
+    # Active traffic is itself proof of life: keep last_seen fresh and promote
+    # provisioned/idle endpoints to active even before the ingress agent reports
+    # WireGuard handshake stats.
+    now = utcnow()
+    for ep in seen_eps.values():
+        ep.last_seen = now
+        if ep.status in (EndpointStatus.provisioned.value, EndpointStatus.idle.value):
+            ep.status = EndpointStatus.active.value
     db.commit()
     # Fan out to the live map (cap payload).
     for f in stored[:50]:
@@ -75,8 +88,15 @@ async def ingest_endpoint_stats(stats: list[EndpointStatIngest],
             ep = db.get(Endpoint, s.endpoint_id)
         if not ep and s.wg_public_key:
             ep = db.scalar(select(Endpoint).where(Endpoint.wg_public_key == s.wg_public_key))
-        if not ep or ep.ingress_node_id != node.id:
+        if not ep:
             continue
+        # A node may report an endpoint whose ingress binding is stale or unset
+        # (e.g. it was just moved). Trust a matching public key and (re)bind it to
+        # the reporting node rather than silently dropping the update.
+        if ep.ingress_node_id and ep.ingress_node_id != node.id and not s.wg_public_key:
+            continue
+        if not ep.ingress_node_id:
+            ep.ingress_node_id = node.id
         connected = bool(s.last_handshake) and (now_epoch - s.last_handshake) <= _ACTIVE_HANDSHAKE_SEC
         conn = {
             "connected": connected,

@@ -145,6 +145,19 @@ class EndpointCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class EndpointUpdate(BaseModel):
+    """Partial edit of an endpoint. Any field left unset is untouched."""
+    name: Optional[str] = None
+    user_uid: Optional[str] = None
+    user_email: Optional[str] = None
+    user_name: Optional[str] = None
+    protocol: Optional[str] = None
+    os: Optional[str] = None
+    ingress_node_id: Optional[str] = None
+    inspect_tls: Optional[bool] = None
+    tags: Optional[list[str]] = None
+
+
 class EndpointOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

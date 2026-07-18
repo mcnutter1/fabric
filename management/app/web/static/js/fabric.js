@@ -33,6 +33,32 @@
   function hhmmss(ts) { const d = ts ? new Date(ts) : new Date(); return d.toTimeString().slice(0, 8); }
   function pill(text, cls) { return '<span class="pill ' + (cls || "") + '"><span class="dot"></span>' + esc(text) + "</span>"; }
 
+  // Shared table-row actions: an optional primary button + a "..." overflow menu.
+  // primary = {label, onclick, cls}; items = [{label, onclick, danger} | {sep:true}].
+  function menuItem(it) {
+    if (it.sep) return "<div class='sep'></div>";
+    const cls = it.danger ? " class='danger'" : "";
+    return "<button" + cls + " onclick=\"" + it.onclick + ";Fabric.closeMenus()\">" + esc(it.label) + "</button>";
+  }
+  function actionMenu(primary, items) {
+    let html = "<div class='row-actions'>";
+    if (primary) html += "<button class='btn sm " + (primary.cls || "") + "' onclick=\"" + primary.onclick + "\">" + esc(primary.label) + "</button>";
+    html += "<div class='menu-wrap'><button class='menu-btn' title='More actions' onclick=\"Fabric.toggleMenu(event, this)\">&hellip;</button>" +
+      "<div class='menu-pop'>" + items.map(menuItem).join("") + "</div></div></div>";
+    return html;
+  }
+  function toggleMenu(ev, btn) {
+    ev.stopPropagation();
+    const pop = btn.nextElementSibling;
+    const wasOpen = pop.classList.contains("open");
+    closeMenus();
+    if (!wasOpen) pop.classList.add("open");
+  }
+  function closeMenus() {
+    const open = document.querySelectorAll(".menu-pop.open");
+    for (let i = 0; i < open.length; i++) open[i].classList.remove("open");
+  }
+
   function toast(msg, kind) {
     const t = $('<div class="toast ' + (kind || "") + '">' + esc(msg) + "</div>");
     $("#toasts").append(t);
@@ -104,13 +130,16 @@
           "<td class='mono'>" + (esc(n.fabric_addr) || "&mdash;") + "</td>" +
           "<td class='mono muted'>" + (esc(n.public_endpoint) || "&mdash;") + "</td>" +
           "<td class='muted'>" + (esc(n.version) || "&mdash;") + "</td>" +
-          "<td style='text-align:right'>" +
-          "<button class='btn sm ghost' onclick=\"Fabric.nodeDetail('" + n.id + "')\">Details</button> " +
-          "<button class='btn sm' onclick=\"Fabric.pairNode('" + n.id + "','" + esc(n.name) + "')\">Pair</button> " +
-          "<button class='btn sm ghost' onclick=\"Fabric.configureNode('" + n.id + "')\">Configure</button> " +
-          "<button class='btn sm ghost' onclick=\"Fabric.viewNodeConfig('" + n.id + "')\">Config</button> " +
-          "<button class='btn sm ghost' onclick=\"Fabric.updateNode('" + n.id + "','" + esc(n.name) + "')\">Update</button> " +
-          "<button class='btn sm danger' onclick=\"Fabric.deleteNode('" + n.id + "')\">&times;</button>" +
+          "<td style='text-align:right'>" + actionMenu(
+          { label: "Details", onclick: "Fabric.nodeDetail('" + n.id + "')" },
+          [
+            { label: "Pair", onclick: "Fabric.pairNode('" + n.id + "','" + esc(n.name) + "')" },
+            { label: "Configure", onclick: "Fabric.configureNode('" + n.id + "')" },
+            { label: "View config", onclick: "Fabric.viewNodeConfig('" + n.id + "')" },
+            { label: "Push update", onclick: "Fabric.updateNode('" + n.id + "','" + esc(n.name) + "')" },
+            { sep: true },
+            { label: "Delete node", danger: true, onclick: "Fabric.deleteNode('" + n.id + "')" }
+          ]) +
           "</td></tr>";
       });
       $("#nodesTable tbody").html(rows.join("") || "<tr><td colspan='8' class='empty'>No nodes yet</td></tr>");
@@ -244,9 +273,16 @@
           "<td class='muted'>" + (e.last_seen ? timeAgo(e.last_seen) : "never") + "</td>" +
           "<td>" + (e.inspect_tls ? pill("inspect", "inspect") : pill("bypass", "")) + "</td>" +
           "<td>" + pill(e.status, e.status) + "</td>" +
-          "<td style='text-align:right'>" +
-          "<button class='btn sm primary' onclick=\"Fabric.endpointConfig('" + e.id + "')\">Get config</button> " +
-          "<button class='btn sm danger' onclick=\"Fabric.revokeEndpoint('" + e.id + "')\">Revoke</button></td></tr>";
+          "<td style='text-align:right'>" + actionMenu(
+            { label: "Get config", cls: "primary", onclick: "Fabric.endpointConfig('" + e.id + "')" },
+            [
+              { label: "Details", onclick: "Fabric.endpointDetail('" + e.id + "')" },
+              { label: "Edit", onclick: "Fabric.editEndpoint('" + e.id + "')" },
+              { label: "Share link", onclick: "Fabric.shareEndpoint('" + e.id + "')" },
+              { sep: true },
+              { label: "Revoke access", danger: true, onclick: "Fabric.revokeEndpoint('" + e.id + "')" },
+              { label: "Delete", danger: true, onclick: "Fabric.deleteEndpoint('" + e.id + "')" }
+            ]) + "</td></tr>";
       });
       $("#endpointsTable tbody").html(rows.join("") || "<tr><td colspan='11' class='empty'>No endpoints yet</td></tr>");
     });
@@ -309,8 +345,59 @@
     }).fail(function () { toast("Could not generate config", "bad"); });
   }
   function revokeEndpoint(id) {
-    if (!confirm("Revoke this endpoint's access?")) return;
-    api("/endpoints/" + id, { method: "DELETE" }).done(function () { toast("Endpoint revoked"); loadEndpoints(); });
+    if (!confirm("Revoke this endpoint's access? The record is kept but the tunnel is dropped.")) return;
+    api("/endpoints/" + id + "/revoke", { method: "POST" })
+      .done(function () { toast("Endpoint revoked"); closeDrawer(); loadEndpoints(); })
+      .fail(function (x) { toast("Revoke failed: " + (x.responseJSON && x.responseJSON.detail || x.status), "bad"); });
+  }
+  function deleteEndpoint(id) {
+    if (!confirm("Permanently delete this endpoint? This removes its record and any provisioning links, and the device loses access on the next config push.")) return;
+    api("/endpoints/" + id, { method: "DELETE" })
+      .done(function () { toast("Endpoint deleted"); closeDrawer(); loadEndpoints(); loadDashboard(); })
+      .fail(function (x) { toast("Delete failed: " + (x.responseJSON && x.responseJSON.detail || x.status), "bad"); });
+  }
+  function editEndpoint(id) {
+    api("/nodes").done(function (nodes) {
+      const ingress = nodes.filter(function (n) { return (n.roles || []).indexOf("ingress") >= 0; });
+      api("/endpoints/" + id).done(function (e) {
+        function sel(v, cur) { return v === cur ? " selected" : ""; }
+        openModal(
+          '<div class="modal-head"><h2>Edit endpoint</h2><span class="close-x" onclick="Fabric.closeModal()">&times;</span></div>' +
+          '<div class="modal-body">' +
+          '<div class="field"><label>Name</label><input id="ee_name" value="' + esc(e.name) + '" /></div>' +
+          '<div class="row"><div class="field"><label>User email</label><input id="ee_email" value="' + esc(e.user_email) + '" /></div>' +
+          '<div class="field"><label>User name</label><input id="ee_uname" value="' + esc(e.user_name) + '" /></div></div>' +
+          '<div class="field"><label>User UID</label><input id="ee_uid" value="' + esc(e.user_uid) + '" /></div>' +
+          '<div class="row"><div class="field"><label>Operating system</label><select id="ee_os">' +
+          OS_OPTS.map(function (o) { return "<option" + sel(o, e.os) + ">" + o + "</option>"; }).join("") + "</select></div>" +
+          '<div class="field"><label>Protocol</label><select id="ee_proto">' +
+          PROTO_OPTS.map(function (o) { return "<option" + sel(o, e.protocol) + ">" + o + "</option>"; }).join("") + "</select></div></div>" +
+          '<div class="field"><label>Ingress node</label><select id="ee_ingress">' +
+          ingress.map(function (n) { return '<option value="' + n.id + '"' + sel(n.id, e.ingress_node_id) + ">" + esc(n.name) + " (" + esc(n.region) + ")</option>"; }).join("") +
+          (ingress.length ? "" : '<option value="">&mdash; no ingress node &mdash;</option>') + "</select>" +
+          '<div class="hint">Moving nodes reassigns the tunnel on the next config push; the user may need a fresh config.</div></div>' +
+          '<div class="field"><label><input type="checkbox" id="ee_inspect"' + (e.inspect_tls ? " checked" : "") + ' style="width:auto"> Enable TLS inspection</label></div>' +
+          "</div>" +
+          '<div class="modal-foot"><button class="btn ghost" onclick="Fabric.closeModal()">Cancel</button>' +
+          '<button class="btn primary" onclick="Fabric.saveEndpointEdit(\'' + e.id + '\')">Save changes</button></div>'
+        );
+      }).fail(function () { toast("Failed to load endpoint", "bad"); });
+    }).fail(function () { toast("Failed to load nodes", "bad"); });
+  }
+  function saveEndpointEdit(id) {
+    const body = {
+      name: $("#ee_name").val().trim(),
+      user_email: $("#ee_email").val().trim(),
+      user_name: $("#ee_uname").val().trim(),
+      user_uid: $("#ee_uid").val().trim(),
+      os: $("#ee_os").val(), protocol: $("#ee_proto").val(),
+      ingress_node_id: $("#ee_ingress").val() || null,
+      inspect_tls: $("#ee_inspect").is(":checked"),
+    };
+    if (!body.name) return toast("Name is required", "bad");
+    api("/endpoints/" + id, { method: "PATCH", body: body })
+      .done(function () { closeModal(); toast("Endpoint updated", "good"); loadEndpoints(); })
+      .fail(function (x) { toast("Update failed: " + (x.responseJSON && x.responseJSON.detail || x.status), "bad"); });
   }
   function shareEndpoint(id) {
     api("/endpoints/" + id + "/provision-link", { method: "POST" }).done(function (r) {
@@ -981,7 +1068,10 @@
         '<h3 style="font-size:13px;margin-top:16px">Recent DNS</h3><table class="data compact"><tbody>' + dnsHtml + "</tbody></table>" +
         '<h3 style="font-size:13px;margin-top:16px">Activity</h3><table class="data compact"><tbody>' + actHtml + "</tbody></table>" +
         '<div class="flex gap mt"><button class="btn sm primary" onclick="Fabric.endpointConfig(\'' + e.id + '\')">Get config</button>' +
-        '<button class="btn sm danger" onclick="Fabric.revokeEndpoint(\'' + e.id + '\')">Revoke</button></div>' +
+        '<button class="btn sm" onclick="Fabric.editEndpoint(\'' + e.id + '\')">Edit</button>' +
+        '<button class="btn sm" onclick="Fabric.shareEndpoint(\'' + e.id + '\')">Share link</button>' +
+        '<button class="btn sm danger" onclick="Fabric.revokeEndpoint(\'' + e.id + '\')">Revoke</button>' +
+        '<button class="btn sm danger" onclick="Fabric.deleteEndpoint(\'' + e.id + '\')">Delete</button></div>' +
         "</div>"
       );
     }).fail(function () { toast("Could not load endpoint detail", "bad"); });
@@ -1062,6 +1152,7 @@
     connectWS();
     setInterval(loadDashboard, 30000);
     $(window).on("resize", WorldMap.resize);
+    document.addEventListener("click", closeMenus);
   });
 
   // public namespace
@@ -1070,6 +1161,8 @@
     openNodeModal: openNodeModal, createNode: createNode, pairNode: pairNode, deleteNode: deleteNode, updateNode: updateNode, viewNodeConfig: viewNodeConfig,
     configureNode: configureNode, saveNodeConfig: saveNodeConfig, nodeDetail: nodeDetail,
     openEndpointModal: openEndpointModal, createEndpoint: createEndpoint, endpointConfig: endpointConfig, revokeEndpoint: revokeEndpoint, shareEndpoint: shareEndpoint, endpointDetail: endpointDetail,
+    editEndpoint: editEndpoint, saveEndpointEdit: saveEndpointEdit, deleteEndpoint: deleteEndpoint,
+    toggleMenu: toggleMenu, closeMenus: closeMenus,
     openPolicyModal: openPolicyModal, addRule: addRule, removeRule: removeRule, savePolicy: savePolicy, editPolicy: editPolicy, deletePolicy: deletePolicy, toggleAdvanced: toggleAdvanced,
     flowDetail: flowDetail, dnsDetail: dnsDetail, certDetail: certDetail,
     loadActivity: loadActivity, debouncedActivity: debouncedActivity,
