@@ -18,6 +18,7 @@ die() { echo -e "\033[1;31m[fabric:error]\033[0m $*" >&2; exit 1; }
 [[ -d "$PREFIX/.git" ]] || die "no git checkout at $PREFIX"
 
 log "fetching latest ($BRANCH)"
+git config --global --add safe.directory "$PREFIX" 2>/dev/null || true
 git -C "$PREFIX" fetch --depth 1 origin "$BRANCH"
 BEFORE=$(git -C "$PREFIX" rev-parse HEAD)
 git -C "$PREFIX" reset --hard "origin/$BRANCH"

@@ -110,6 +110,9 @@ log "using $(python3 --version 2>&1) at $(command -v python3)"
 id "$RUN_USER" >/dev/null 2>&1 || useradd --system --home "$PREFIX" --shell /usr/sbin/nologin "$RUN_USER"
 
 # --- fetch / update code ----------------------------------------------
+# The checkout is owned by $RUN_USER but git runs here as root; tell git this
+# directory is trusted to avoid the "dubious ownership" fatal.
+git config --global --add safe.directory "$PREFIX" 2>/dev/null || true
 if [[ -d "$PREFIX/.git" ]]; then
   log "updating checkout in $PREFIX"
   git -C "$PREFIX" fetch --depth 1 origin "$BRANCH"

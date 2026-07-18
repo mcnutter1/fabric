@@ -90,6 +90,7 @@ if [[ -n "$BUNDLE_URL" ]] && fetch_bundle "$BUNDLE_URL"; then
   log "installed node bundle from management plane"
 elif [[ -d "$PREFIX/.git" ]]; then
   log "updating existing checkout in $PREFIX"
+  git config --global --add safe.directory "$PREFIX" 2>/dev/null || true
   git -C "$PREFIX" fetch --depth 1 origin "$BRANCH"
   git -C "$PREFIX" reset --hard "origin/$BRANCH"
 else
