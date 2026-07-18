@@ -127,6 +127,17 @@ class FabricOrchestrator:
             })
         return peers, endpoints
 
+    def _all_endpoint_pools(self) -> list[str]:
+        """Every ingress node's endpoint pool CIDR. Nodes use this so their flow
+        observers recognise client-originated traffic (endpoint pools can be any
+        operator-chosen CIDR, not just the fabric CGNAT range)."""
+        pools: list[str] = []
+        for n in self._active_nodes():
+            if NodeRole.ingress.value in _roles(n) and n.endpoint_pool_cidr:
+                if n.endpoint_pool_cidr not in pools:
+                    pools.append(n.endpoint_pool_cidr)
+        return pools
+
     def compute_node_config(self, node: Node) -> dict:
         peers = []
         others = [n for n in self._active_nodes() if n.id != node.id and n.wg_public_key]
@@ -166,6 +177,7 @@ class FabricOrchestrator:
 
         routing = {
             "endpoint_pool": node.endpoint_pool_cidr or None,
+            "endpoint_pools": self._all_endpoint_pools(),
             "egress": (
                 {"via_node": egress_choice.id, "peer_addr": egress_choice.fabric_addr}
                 if egress_choice else None

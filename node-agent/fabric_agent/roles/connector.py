@@ -35,6 +35,11 @@ class ConnectorRole(Role):
 
     def setup(self, config: dict) -> None:
         self.cidrs = self._owned_cidrs(config)
+        # Client endpoints use operator-defined pool CIDRs (not just the fabric
+        # CGNAT range), so tell the observer which sources are fabric-originated
+        # or their traffic gets filtered out and never reported as flows.
+        pools = list((config.get("routing", {}) or {}).get("endpoint_pools", []) or [])
+        self.observer.set_sources(pools)
         if not self.cidrs:
             self.log.info("no private CIDRs assigned yet")
             return

@@ -8,6 +8,7 @@ packet-inspection proxy.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import time
@@ -19,17 +20,41 @@ log = logging.getLogger("fabric.agent.flowmon")
 
 _KV = re.compile(r"(\w+)=(\S+)")
 
+# The fabric CGNAT supernet (node addrs + default CGNAT pools). Always treated
+# as a fabric source; operators may additionally use arbitrary private CIDRs for
+# their endpoint pools (e.g. 10.10.120.0/24), which are supplied at runtime.
+FABRIC_SUPERNET = "100.64.0.0/10"
+
 
 class FlowObserver:
-    def __init__(self, system: System, src_prefixes: tuple = ("100.64.", "100.96.",
-                 "100.65.", "100.66.", "100.67.", "100.68.", "100.69.", "100.70.")):
+    def __init__(self, system: System, src_cidrs: Optional[list] = None):
         self.sys = system
-        self.src_prefixes = src_prefixes
         self._seen: dict[tuple, float] = {}
         self._ttl = 300  # forget a flow tuple after 5 min so long flows re-report
+        self._src_nets: list = []
+        self.set_sources(src_cidrs or [FABRIC_SUPERNET])
+
+    def set_sources(self, cidrs: list) -> None:
+        """Define which source CIDRs count as fabric-originated. Endpoint pools
+        can be any operator-chosen CIDR, so we match by network membership
+        rather than fixed string prefixes. The fabric supernet is always
+        included as a safety net."""
+        nets = []
+        for c in list(cidrs or []) + [FABRIC_SUPERNET]:
+            try:
+                net = ipaddress.ip_network(c, strict=False)
+            except ValueError:
+                continue
+            if net not in nets:
+                nets.append(net)
+        self._src_nets = nets
 
     def _from_fabric(self, ip: str) -> bool:
-        return any(ip.startswith(p) for p in self.src_prefixes)
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        return any(addr in net for net in self._src_nets)
 
     def poll(self) -> list[dict]:
         """Return flow dicts for connections first seen since the previous poll."""
