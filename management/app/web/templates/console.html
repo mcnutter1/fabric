@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fabric Console · {{ domain }}</title>
+  <link rel="stylesheet" href="/static/css/fabric.css" />
+  <link rel="preconnect" href="https://code.jquery.com" />
+</head>
+<body>
+<div class="app">
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 2v6M12 16v6M2 12h6M16 12h6M5 5l4 4M15 15l4 4M19 5l-4 4M9 15l-4 4"/><circle cx="12" cy="12" r="3" fill="#fff" stroke="none"/></svg>
+      </span>
+      <span>Fabric <small>{{ domain }}</small></span>
+    </div>
+    <span class="env-pill">{{ env }}</span>
+    <div class="spacer"></div>
+    <div class="conn" id="conn"><span class="dot"></span><span id="connText">connecting…</span></div>
+    <div class="user-chip">
+      <div class="avatar" id="avatar">{{ user.name[0] if user.name else 'A' }}</div>
+      <div style="line-height:1.1">
+        <div style="font-weight:600">{{ user.name }}</div>
+        <div style="font-size:11px;color:var(--text-faint)">{{ user.email }}</div>
+      </div>
+      <a class="btn sm ghost" href="/api/v1/auth/logout" title="Sign out" style="margin-left:8px">Sign out</a>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="nav-group">Overview</div>
+    <div class="nav-item active" data-view="dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+      Dashboard
+    </div>
+    <div class="nav-item" data-view="map">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20"/></svg>
+      Fabric Map
+    </div>
+    <div class="nav-group">Infrastructure</div>
+    <div class="nav-item" data-view="nodes">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="7" rx="1"/><rect x="2" y="14" width="20" height="7" rx="1"/><circle cx="6" cy="6.5" r="1" fill="currentColor"/><circle cx="6" cy="17.5" r="1" fill="currentColor"/></svg>
+      Nodes <span class="badge" id="badgeNodes">–</span>
+    </div>
+    <div class="nav-item" data-view="endpoints">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+      Endpoints <span class="badge" id="badgeEndpoints">–</span>
+    </div>
+    <div class="nav-group">Security</div>
+    <div class="nav-item" data-view="policies">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/></svg>
+      Policies
+    </div>
+    <div class="nav-item" data-view="flows">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h7"/><path d="M18 14l3 3-3 3"/></svg>
+      Traffic Flows
+    </div>
+    <div class="nav-item" data-view="dns">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>
+      DNS &amp; Web
+    </div>
+    <div class="nav-item" data-view="pki">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="12" r="5"/><path d="M13 12h8M17 12v4M21 12v3"/></svg>
+      PKI &amp; Certificates
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <main class="main">
+    <!-- Dashboard -->
+    <section class="view active" id="view-dashboard">
+      <div class="view-head"><div><h1>Dashboard</h1><p>Live posture across the fabric — last 24 hours.</p></div>
+        <button class="btn" onclick="Fabric.refreshAll()"><span class="spin" style="display:none"></span>Refresh</button></div>
+      <div class="grid cols-4" id="statCards"></div>
+      <div class="grid cols-3 mt">
+        <div class="panel" style="grid-column: span 2">
+          <div class="panel-head"><h3>Traffic categories (24h)</h3><span class="muted" style="font-size:12px">by flow count</span></div>
+          <div class="panel-body" id="catBars"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Top destinations</h3></div>
+          <div class="panel-body" id="countryBars"></div>
+        </div>
+      </div>
+      <div class="grid cols-2 mt">
+        <div class="panel">
+          <div class="panel-head"><h3>Live event stream</h3><span class="conn live"><span class="dot"></span></span></div>
+          <div class="feed" id="liveFeed"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Fabric health</h3></div>
+          <div class="panel-body"><div class="map-wrap" style="height:300px"><canvas id="miniTopo"></canvas></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Map -->
+    <section class="view" id="view-map">
+      <div class="view-head"><div><h1>Fabric Map</h1><p>Node mesh topology and real-time traffic geography.</p></div>
+        <div class="flex gap">
+          <label class="toggle"><input type="checkbox" id="mapFlowsToggle" checked onchange="Fabric.toggleMapFlows(this.checked)"/> <span>Traffic flows</span></label>
+          <button class="btn" onclick="Fabric.recomputeFabric()">Recompute mesh</button></div></div>
+      <div class="panel"><div class="panel-body" style="padding:0">
+        <div class="map-wrap" style="height:520px">
+          <canvas id="worldMap"></canvas>
+          <div class="map-legend">
+            <span><i style="background:#3b82f6"></i>Ingress</span>
+            <span><i style="background:#22c55e"></i>Egress</span>
+            <span><i style="background:#8b5cf6"></i>Connector</span>
+            <span><i style="background:#f59e0b"></i>To internet</span>
+            <span><i style="background:#8b5cf6"></i>To private</span>
+          </div>
+          <div class="map-hint muted">Click a node for details &middot; flows animate endpoint &rarr; mesh &rarr; destination</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- Nodes -->
+    <section class="view" id="view-nodes">
+      <div class="view-head"><div><h1>Nodes</h1><p>Managed fabric nodes. Install once, pair, and everything else is pushed.</p></div>
+        <button class="btn primary" onclick="Fabric.openNodeModal()">+ Add node</button></div>
+      <div class="panel"><table class="data" id="nodesTable">
+        <thead><tr><th>Name</th><th>Roles</th><th>Region</th><th>Status</th><th>Fabric addr</th><th>Endpoint</th><th>Version</th><th></th></tr></thead>
+        <tbody></tbody></table></div>
+    </section>
+
+    <!-- Endpoints -->
+    <section class="view" id="view-endpoints">
+      <div class="view-head"><div><h1>Endpoints</h1><p>Client devices. Choose OS + protocol, generate config.</p></div>
+        <button class="btn primary" onclick="Fabric.openEndpointModal()">+ New endpoint</button></div>
+      <div class="panel"><table class="data" id="endpointsTable">
+        <thead><tr><th>Name</th><th>User</th><th>OS</th><th>Protocol</th><th>Address</th><th>Inspect</th><th>Status</th><th></th></tr></thead>
+        <tbody></tbody></table></div>
+    </section>
+
+    <!-- Policies -->
+    <section class="view" id="view-policies">
+      <div class="view-head"><div><h1>Policies</h1><p>One engine, identity + device aware. First match wins.</p></div>
+        <button class="btn primary" onclick="Fabric.openPolicyModal()">+ New policy</button></div>
+      <div id="policiesList" class="grid" style="gap:14px"></div>
+    </section>
+
+    <!-- Flows -->
+    <section class="view" id="view-flows">
+      <div class="view-head"><div><h1>Traffic Flows</h1><p>Classified, enriched flow records streaming from the fabric.</p></div>
+        <span class="conn live"><span class="dot"></span>live</span></div>
+      <div class="panel"><table class="data compact" id="flowsTable">
+        <thead><tr><th>Time</th><th>User / Src</th><th>Destination</th><th>Category</th><th>Geo</th><th>ISP/ASN</th><th>Egress</th><th>Verdict</th><th>Bytes</th></tr></thead>
+        <tbody></tbody></table></div>
+    </section>
+
+    <!-- DNS -->
+    <section class="view" id="view-dns">
+      <div class="view-head"><div><h1>DNS &amp; Web Monitoring</h1><p>Every query captured, categorized, and policy-controlled.</p></div>
+        <span class="conn live"><span class="dot"></span>live</span></div>
+      <div class="panel"><table class="data compact" id="dnsTable">
+        <thead><tr><th>Time</th><th>Client</th><th>Query</th><th>Type</th><th>Answer</th><th>Category</th><th>Action</th></tr></thead>
+        <tbody></tbody></table></div>
+    </section>
+
+    <!-- PKI -->
+    <section class="view" id="view-pki">
+      <div class="view-head"><div><h1>PKI &amp; Certificates</h1><p>Root of trust for the fabric, endpoints, and TLS inspection.</p></div>
+        <a class="btn primary" href="/api/v1/pki/trusted-root.pem">Download trusted root</a></div>
+      <div class="grid cols-4" id="pkiCards"></div>
+      <div class="panel mt"><div class="panel-head"><h3>Issued certificates</h3></div>
+        <table class="data compact" id="certsTable">
+          <thead><tr><th>Kind</th><th>Subject</th><th>Serial</th><th>Expires</th><th>Ref</th><th>Status</th></tr></thead>
+          <tbody></tbody></table></div>
+    </section>
+  </main>
+</div>
+
+<!-- Modal + drawer mounts -->
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+<div class="drawer" id="drawer"></div>
+<div class="toast-wrap" id="toasts"></div>
+
+<script>window.FABRIC_USER = {{ user | tojson }}; window.FABRIC_ADMIN = {{ 'true' if is_admin else 'false' }};</script>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="/static/js/fabric.js"></script>
+</body>
+</html>

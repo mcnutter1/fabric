@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Virtualenvs anywhere
+**/.venv/
+
+# Local databases (may contain encrypted PKI material — never commit)
+*.db
+*.sqlite
+*.sqlite3
+management/fabric.db
+
+# Secrets & environment
+.env
+*.env
+!*.env.example
+/etc/fabric/*
+
+# Node agent runtime state (keys, tokens, certs)
+agent-state*/
+**/agent-state*/
+*.key
+*.crt
+*.pem
+!**/trusted-root*.pem
+
+# Logs / temp
+*.log
+/tmp/fabric_*.log
+.DS_Store

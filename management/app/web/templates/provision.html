@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Fabric &middot; Provision {{ endpoint_name }}</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(1200px 600px at 50% -10%, #16233b 0%, #0b1220 55%, #070c15 100%);
+      color: #e7eefb; min-height: 100vh; padding: 24px 16px 48px;
+    }
+    .card {
+      max-width: 460px; margin: 0 auto; background: rgba(19,29,48,.75);
+      border: 1px solid rgba(120,150,200,.18); border-radius: 18px; padding: 22px 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.45); backdrop-filter: blur(8px);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    .brand .dot { width: 12px; height: 12px; border-radius: 50%; background: linear-gradient(135deg,#3b82f6,#22c55e); }
+    .brand b { font-size: 15px; letter-spacing: .3px; }
+    h1 { font-size: 20px; margin: 12px 0 2px; }
+    .sub { color: #9fb2d0; font-size: 13px; margin: 0 0 16px; }
+    .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .pill { font-size: 11px; padding: 4px 9px; border-radius: 999px; background: rgba(59,130,246,.16);
+            border: 1px solid rgba(59,130,246,.35); color: #b8d0ff; }
+    .qr { text-align: center; background: #fff; border-radius: 14px; padding: 14px; margin: 4px 0 18px; }
+    .qr img { width: 220px; max-width: 100%; display: block; margin: 0 auto; }
+    .qr .hint { color: #334155; font-size: 12px; margin-top: 8px; }
+    .btn { display: block; width: 100%; text-align: center; text-decoration: none; padding: 13px 16px;
+           border-radius: 12px; font-weight: 600; font-size: 15px; border: 0; cursor: pointer; margin-bottom: 10px; }
+    .btn.primary { background: linear-gradient(135deg,#3b82f6,#2563eb); color: #fff; }
+    .btn.ghost { background: rgba(120,150,200,.12); color: #cfe0ff; border: 1px solid rgba(120,150,200,.25); }
+    ol { padding-left: 18px; color: #b7c6e0; font-size: 13px; line-height: 1.55; }
+    ol li { margin-bottom: 6px; }
+    .foot { color: #67789a; font-size: 11px; text-align: center; margin-top: 18px; }
+    .warn { color: #fca5a5; font-size: 12px; text-align: center; margin-top: 14px; }
+    h3 { font-size: 13px; color: #9fb2d0; text-transform: uppercase; letter-spacing: .6px; margin: 20px 0 8px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand"><span class="dot"></span><b>Fabric SASE</b></div>
+    <h1>{{ endpoint_name }}</h1>
+    <p class="sub">Provision your secure connection. This link is private &mdash; don't share it.</p>
+    <div class="meta">
+      <span class="pill">{{ protocol }}</span>
+      <span class="pill">{{ os }}</span>
+      {% if inspect_tls %}<span class="pill">TLS inspection</span>{% endif %}
+    </div>
+
+    {% if qr %}
+    <div class="qr">
+      <img src="data:image/png;base64,{{ qr }}" alt="Scan to import tunnel" />
+      <div class="hint">Open the WireGuard app &rarr; add tunnel &rarr; scan this code</div>
+    </div>
+    {% endif %}
+
+    <button class="btn primary" onclick="downloadConf()">Download config ({{ filename }})</button>
+    <a class="btn ghost" href="{{ base }}/api/v1/pki/trusted-root.pem">Download trusted root certificate</a>
+
+    <h3>Install steps</h3>
+    <ol>
+      {% for step in install_steps %}<li>{{ step }}</li>{% endfor %}
+    </ol>
+
+    <div class="warn">This link expires {{ expires_human }}. Downloading rotates your key.</div>
+    <div class="foot">Fabric &middot; {{ domain }}</div>
+  </div>
+
+  <script>
+    var CONF = {{ config_json|safe }};
+    var FILENAME = {{ filename_json|safe }};
+    function downloadConf() {
+      var blob = new Blob([CONF], { type: "text/plain" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = FILENAME;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
+    }
+  </script>
+</body>
+</html>

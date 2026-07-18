@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+#
+# Fabric node installer.
+#
+#   curl -fsSL https://fabric.mcnutt.cloud/install/node.sh | sudo bash -s -- \
+#        --manager https://fabric.mcnutt.cloud --pair XXXX-XXXX-XXXX
+#
+# Installs WireGuard + the Fabric node agent, registers a systemd service, and
+# enrols the node with the management plane using a one-time pairing code.
+#
+set -euo pipefail
+
+REPO="${FABRIC_REPO:-https://github.com/mcnutter1/fabric.git}"
+BRANCH="${FABRIC_BRANCH:-main}"
+PREFIX="/opt/fabric"
+STATE_DIR="/var/lib/fabric"
+ENV_FILE="/etc/fabric/agent.env"
+IFACE="fab0"
+MANAGER="${FABRIC_AGENT_MANAGER:-}"
+PAIR="${FABRIC_AGENT_PAIR:-}"
+ADVERTISED="${FABRIC_AGENT_ENDPOINT:-}"
+UPSTREAM_DNS="${FABRIC_AGENT_UPSTREAM_DNS:-1.1.1.1}"
+
+log()  { echo -e "\033[1;36m[fabric]\033[0m $*"; }
+err()  { echo -e "\033[1;31m[fabric:error]\033[0m $*" >&2; }
+die()  { err "$*"; exit 1; }
+
+# --- args --------------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --manager)   MANAGER="$2"; shift 2 ;;
+    --pair)      PAIR="$2"; shift 2 ;;
+    --interface) IFACE="$2"; shift 2 ;;
+    --endpoint)  ADVERTISED="$2"; shift 2 ;;
+    --upstream-dns) UPSTREAM_DNS="$2"; shift 2 ;;
+    --repo)      REPO="$2"; shift 2 ;;
+    --branch)    BRANCH="$2"; shift 2 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+[[ $EUID -eq 0 ]] || die "must run as root (use sudo)"
+[[ -n "$MANAGER" ]] || die "--manager URL is required"
+[[ -n "$PAIR" ]] || die "--pair CODE is required"
+
+# --- OS packages -------------------------------------------------------
+log "installing system dependencies"
+if command -v apt-get >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq wireguard wireguard-tools iproute2 iptables \
+                         python3 python3-venv python3-pip git ca-certificates
+elif command -v dnf >/dev/null 2>&1; then
+  dnf install -y wireguard-tools iproute iptables python3 python3-pip git
+else
+  die "unsupported package manager (need apt-get or dnf)"
+fi
+
+# --- fetch / update code ----------------------------------------------
+# Preferred path: download a self-contained bundle straight from the
+# management plane (no GitHub access required on the node). Falls back to
+# a git clone when no bundle URL is provided.
+BUNDLE_URL="${FABRIC_BUNDLE_URL:-}"
+if [[ -z "$BUNDLE_URL" && -n "$MANAGER" ]]; then
+  BUNDLE_URL="${MANAGER%/}/install/node-agent.tar.gz"
+fi
+
+fetch_bundle() {
+  local url="$1" tarball="/tmp/fabric-node-agent.tar.gz"
+  log "downloading node bundle from $url"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$tarball" || return 1
+  else
+    wget -qO "$tarball" "$url" || return 1
+  fi
+  # sanity check: must be a gzip tarball with content
+  [[ -s "$tarball" ]] || return 1
+  rm -rf "$PREFIX"
+  mkdir -p "$PREFIX"
+  tar -xzf "$tarball" -C "$PREFIX" || return 1
+  rm -f "$tarball"
+  [[ -f "$PREFIX/node-agent/requirements.txt" ]] || return 1
+  return 0
+}
+
+if [[ -n "$BUNDLE_URL" ]] && fetch_bundle "$BUNDLE_URL"; then
+  log "installed node bundle from management plane"
+elif [[ -d "$PREFIX/.git" ]]; then
+  log "updating existing checkout in $PREFIX"
+  git -C "$PREFIX" fetch --depth 1 origin "$BRANCH"
+  git -C "$PREFIX" reset --hard "origin/$BRANCH"
+else
+  log "falling back to git clone $REPO ($BRANCH) -> $PREFIX"
+  command -v git >/dev/null 2>&1 || die "git required for fallback clone"
+  rm -rf "$PREFIX"
+  git clone --depth 1 --branch "$BRANCH" "$REPO" "$PREFIX"
+fi
+
+# --- python venv -------------------------------------------------------
+log "creating virtualenv"
+python3 -m venv "$PREFIX/node-agent/.venv"
+"$PREFIX/node-agent/.venv/bin/pip" install --upgrade pip -q
+"$PREFIX/node-agent/.venv/bin/pip" install -q -r "$PREFIX/node-agent/requirements.txt"
+
+# --- state + config ----------------------------------------------------
+mkdir -p "$STATE_DIR" /etc/fabric
+chmod 700 "$STATE_DIR"
+
+log "writing $ENV_FILE"
+cat > "$ENV_FILE" <<EOF
+FABRIC_AGENT_MANAGER=$MANAGER
+FABRIC_AGENT_PAIR=$PAIR
+FABRIC_AGENT_IFACE=$IFACE
+FABRIC_AGENT_STATE_DIR=$STATE_DIR
+FABRIC_AGENT_UPSTREAM_DNS=$UPSTREAM_DNS
+FABRIC_AGENT_ENDPOINT=$ADVERTISED
+EOF
+chmod 600 "$ENV_FILE"
+
+# --- systemd -----------------------------------------------------------
+log "installing systemd unit"
+install -m 644 "$PREFIX/deploy/systemd/fabric-agent.service" /etc/systemd/system/fabric-agent.service
+systemctl daemon-reload
+systemctl enable --now fabric-agent.service
+
+log "done. node is enrolling — follow logs with:  journalctl -u fabric-agent -f"

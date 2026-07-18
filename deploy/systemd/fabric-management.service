@@ -1,0 +1,26 @@
+[Unit]
+Description=Fabric management plane (API + console)
+Documentation=https://fabric.mcnutt.cloud
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fabric
+Group=fabric
+EnvironmentFile=/etc/fabric/management.env
+WorkingDirectory=/opt/fabric/management
+ExecStart=/opt/fabric/management/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --proxy-headers --forwarded-allow-ips=*
+Restart=always
+RestartSec=5
+StateDirectory=fabric
+LimitNOFILE=65535
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fabric
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
