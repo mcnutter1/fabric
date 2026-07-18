@@ -1,6 +1,7 @@
 """Auth routes — McNutt Cloud SSO callback, logout, and identity."""
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -8,6 +9,8 @@ from fastapi.responses import RedirectResponse, JSONResponse
 
 from ..auth import Principal, get_current_user, issue_session_cookie, mcnutt
 from ..config import settings
+
+log = logging.getLogger("fabric.auth")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -29,15 +32,18 @@ async def callback(request: Request):
     payload_raw = request.query_params.get("payload")
     sig = request.query_params.get("sig")
     if not payload_raw or not sig:
+        log.warning("SSO callback missing payload/sig (payload=%s sig=%s)",
+                    bool(payload_raw), bool(sig))
         return RedirectResponse("/api/v1/auth/denied")
 
-    import json
-    try:
-        payload = json.loads(payload_raw)
-    except ValueError:
+    if not settings.auth_app_secret:
+        log.error("SSO callback cannot verify: FABRIC_AUTH_APP_SECRET is not set")
         return RedirectResponse("/api/v1/auth/denied")
 
-    if not mcnutt.verify_hmac(mcnutt.canonical_json(payload), sig):
+    payload = mcnutt.verify_redirect_payload(payload_raw, sig)
+    if payload is None:
+        log.warning("SSO callback signature verification failed for app_id=%s",
+                    settings.auth_app_id)
         return RedirectResponse("/api/v1/auth/denied")
 
     principal = Principal.from_payload(payload)

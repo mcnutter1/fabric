@@ -41,8 +41,33 @@ def verify_hmac(payload_json: str, sig: str, secret: Optional[str] = None) -> bo
 
 
 def canonical_json(payload: Any) -> str:
-    """Serialise like PHP json_encode(..., JSON_UNESCAPED_SLASHES)."""
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    """Serialise like PHP ``json_encode($payload, JSON_UNESCAPED_SLASHES)``.
+
+    PHP escapes non-ASCII as \\uXXXX by default (JSON_UNESCAPED_UNICODE is NOT
+    set here) and leaves forward slashes unescaped. ``ensure_ascii=True`` matches
+    the unicode escaping; Python never escapes slashes, matching the slash flag.
+    """
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+
+
+def verify_redirect_payload(payload_raw: str, sig: str) -> Optional[dict]:
+    """Verify an SSO redirect's ``payload``+``sig`` and return the parsed dict.
+
+    The login server signs ``json_encode($payload, JSON_UNESCAPED_SLASHES)``.
+    We re-encode the decoded payload to match, but also accept the raw query
+    string as a fallback in case the server signed it verbatim. Returns the
+    payload dict on success, or ``None`` if it cannot be trusted.
+    """
+    try:
+        payload = json.loads(payload_raw)
+    except ValueError:
+        return None
+    candidates = (canonical_json(payload), payload_raw)
+    for candidate in candidates:
+        if verify_hmac(candidate, sig):
+            return payload
+    return None
+
 
 
 async def validate_session_token(token: str, client_ip: str = "") -> Optional[dict]:
