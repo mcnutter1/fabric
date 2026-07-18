@@ -42,6 +42,7 @@ class AgentConfig:
     telemetry_flush_interval: int = 5     # seconds
     dns_listen: str = "100.64.0.1:53"     # fabric-side DNS resolver bind
     upstream_dns: str = "1.1.1.1"
+    dns_sinkhole: str = ""                 # override IP for blocked/sinkholed domains (""=NXDOMAIN)
     verify_tls: bool = True               # verify manager TLS (uses manager_ca)
     dry_run: bool = False                 # log data-plane commands instead of running
     simulate: bool = False                # emit synthetic telemetry (demo / no real traffic)
@@ -59,6 +60,7 @@ class AgentConfig:
             heartbeat_interval=int(e("FABRIC_AGENT_HEARTBEAT", "15")),
             config_poll_interval=int(e("FABRIC_AGENT_CONFIG_POLL", "30")),
             upstream_dns=e("FABRIC_AGENT_UPSTREAM_DNS", "1.1.1.1"),
+            dns_sinkhole=e("FABRIC_AGENT_DNS_SINKHOLE", ""),
             advertised_endpoint=e("FABRIC_AGENT_ENDPOINT", ""),
             verify_tls=e("FABRIC_AGENT_VERIFY_TLS", "1") != "0",
             dry_run=e("FABRIC_AGENT_DRY_RUN", "0") == "1",

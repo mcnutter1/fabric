@@ -20,6 +20,84 @@ router = APIRouter(tags=["telemetry"])
 # A handshake newer than this many seconds means the endpoint is actively connected.
 _ACTIVE_HANDSHAKE_SEC = 180
 
+# The same logical connection is observed independently by the ingress node and
+# the egress/connector node (each reads its own conntrack table). Two reports of
+# the same (endpoint, dst, port, proto) tuple within this window are treated as
+# one flow so the record carries BOTH the ingress and egress hops.
+_FLOW_CORRELATE_SEC = 120
+
+
+def _reporter_role(node: "Node", ep: "Endpoint | None") -> str:
+    """Classify how the reporting node sits on this flow: 'ingress' (the client's
+    entry node / inspection point) or 'egress' (the exit node — egress or private
+    connector). Ownership of the endpoint's pool wins over generic roles."""
+    roles = node.roles or []
+    if ep is not None and ep.ingress_node_id and ep.ingress_node_id == node.id:
+        return "ingress"
+    if any(r in ("egress", "private_connector") for r in roles):
+        return "egress"
+    return "ingress"
+
+
+def _merge_flow(rec: "FlowRecord", node: "Node", role: str, data: dict,
+                ep: "Endpoint | None", now) -> None:
+    """Fold a second observation of the same flow into an existing record."""
+    if role == "ingress":
+        rec.node_id = node.id
+        # The ingress does inspection/classification — prefer its enrichment.
+        for fld in ("sni", "domain", "category", "app", "ja3", "verdict", "risk", "user_uid"):
+            val = data.get(fld)
+            if val:
+                setattr(rec, fld, val)
+    else:  # egress / connector
+        rec.egress_node_id = node.id
+        if data.get("egress_ip"):
+            rec.egress_ip = data["egress_ip"]
+        # If the ingress hasn't reported yet, attribute it from the endpoint.
+        if ep is not None and ep.ingress_node_id and (not rec.node_id or rec.node_id == node.id):
+            rec.node_id = ep.ingress_node_id
+        # The exit node carries the geo/ASN enrichment for the real destination.
+        for fld in ("country", "asn", "isp", "geo"):
+            val = data.get(fld)
+            if val:
+                setattr(rec, fld, val)
+    # Each node counts bytes on its own leg; take the larger to avoid double count.
+    rec.tx_bytes = max(rec.tx_bytes or 0, data.get("tx_bytes", 0) or 0)
+    rec.rx_bytes = max(rec.rx_bytes or 0, data.get("rx_bytes", 0) or 0)
+    if data.get("duration_ms"):
+        rec.duration_ms = max(rec.duration_ms or 0, data["duration_ms"])
+    if data.get("meta"):
+        merged = dict(rec.meta or {})
+        merged.update(data["meta"])
+        rec.meta = merged
+    rec.ts = now
+
+
+def _new_flow(node: "Node", role: str, data: dict, ep: "Endpoint | None") -> "FlowRecord":
+    """Create a record, pre-filling both hop ids from the reporter's role so the
+    path shows ingress -> egress even when only one node has reported so far."""
+    payload = dict(data)
+    egress_node_id = payload.pop("egress_node_id", "")
+    if role == "ingress":
+        node_id = node.id
+    else:
+        node_id = ep.ingress_node_id if (ep and ep.ingress_node_id) else node.id
+        egress_node_id = node.id
+    return FlowRecord(node_id=node_id, egress_node_id=egress_node_id, **payload)
+
+
+def _flow_public(rec: "FlowRecord") -> dict:
+    return {
+        "id": rec.id, "ts": rec.ts, "node_id": rec.node_id,
+        "egress_node_id": rec.egress_node_id, "endpoint_id": rec.endpoint_id,
+        "user_uid": rec.user_uid, "src_ip": rec.src_ip, "dst_ip": rec.dst_ip,
+        "dst_port": rec.dst_port, "protocol": rec.protocol, "sni": rec.sni,
+        "domain": rec.domain, "category": rec.category, "country": rec.country,
+        "asn": rec.asn, "isp": rec.isp, "verdict": rec.verdict,
+        "egress_ip": rec.egress_ip, "tx_bytes": rec.tx_bytes, "rx_bytes": rec.rx_bytes,
+        "geo": rec.geo or {},
+    }
+
 
 # ------------------------------------------------------------------ ingestion (nodes)
 @router.post("/node/flows")
@@ -30,35 +108,56 @@ async def ingest_flows(flows: list[FlowIngest], node: Node = Depends(require_nod
     ep_by_addr = {
         e.address: e for e in db.scalars(select(Endpoint).where(Endpoint.address != ""))
     }
-    stored = []
+    now = utcnow()
+    window = now - dt.timedelta(seconds=_FLOW_CORRELATE_SEC)
+    stored: list[dict] = []
     seen_eps: dict[str, Endpoint] = {}
     for f in flows:
         data = f.model_dump()
-        if not data.get("endpoint_id") and data.get("src_ip"):
-            ep = ep_by_addr.get(data["src_ip"])
-            if ep:
+        ep = ep_by_addr.get(data.get("src_ip", "")) if data.get("src_ip") else None
+        if ep is None and data.get("endpoint_id"):
+            ep = db.get(Endpoint, data["endpoint_id"])
+        if ep is not None:
+            if not data.get("endpoint_id"):
                 data["endpoint_id"] = ep.id
-                if not data.get("user_uid"):
-                    data["user_uid"] = ep.user_uid or ep.user_email
+            if not data.get("user_uid"):
+                data["user_uid"] = ep.user_uid or ep.user_email
+            seen_eps[ep.id] = ep
+
+        role = _reporter_role(node, ep)
+
+        # Correlate with the peer node's observation of the same connection so a
+        # single record spans ingress -> egress instead of one row per node.
+        q = select(FlowRecord).where(
+            FlowRecord.dst_ip == data.get("dst_ip", ""),
+            FlowRecord.dst_port == data.get("dst_port", 0),
+            FlowRecord.protocol == data.get("protocol", ""),
+            FlowRecord.ts >= window,
+        )
         if data.get("endpoint_id"):
-            ep = ep_by_addr.get(data.get("src_ip")) or db.get(Endpoint, data["endpoint_id"])
-            if ep:
-                seen_eps[ep.id] = ep
-        rec = FlowRecord(node_id=node.id, **data)
-        db.add(rec)
-        stored.append(data)
+            q = q.where(FlowRecord.endpoint_id == data["endpoint_id"])
+        else:
+            q = q.where(FlowRecord.src_ip == data.get("src_ip", ""))
+        match = db.scalars(q.order_by(desc(FlowRecord.ts)).limit(1)).first()
+
+        if match is not None:
+            _merge_flow(match, node, role, data, ep, now)
+            rec = match
+        else:
+            rec = _new_flow(node, role, data, ep)
+            db.add(rec)
+        stored.append(rec)
     # Active traffic is itself proof of life: keep last_seen fresh and promote
     # provisioned/idle endpoints to active even before the ingress agent reports
     # WireGuard handshake stats.
-    now = utcnow()
     for ep in seen_eps.values():
         ep.last_seen = now
         if ep.status in (EndpointStatus.provisioned.value, EndpointStatus.idle.value):
             ep.status = EndpointStatus.active.value
     db.commit()
     # Fan out to the live map (cap payload).
-    for f in stored[:50]:
-        await hub.publish("flow", {"node_id": node.id, **f})
+    for rec in stored[:50]:
+        await hub.publish("flow", _flow_public(rec))
     return {"ok": True, "stored": len(stored)}
 
 

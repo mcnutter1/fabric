@@ -58,7 +58,8 @@ class IngressRole(Role):
             cfg.dns_listen = f"{gw_cidr.split('/')[0]}:53"
         if self.dns is None:
             self.dns = DNSResolver(cfg.dns_listen, cfg.upstream_dns,
-                                   self.classifier, self.telemetry.add_dns)
+                                   self.classifier, self.telemetry.add_dns,
+                                   sinkhole=getattr(cfg, "dns_sinkhole", ""))
             started = self.dns.start()
             # Expose on the agent so apply_policy() can push updates.
             self.agent.dns = self.dns
