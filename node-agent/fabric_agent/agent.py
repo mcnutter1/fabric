@@ -15,9 +15,11 @@ import json
 import logging
 import platform
 import random
+import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 import os
@@ -219,19 +221,38 @@ class FabricAgent:
             pass
 
     def _self_update(self) -> None:
-        """Run the on-host updater (git pull + restart) when the manager asks."""
-        updater = self.cfg.updater_path
+        """Run the in-package updater when the manager asks.
+
+        The updater downloads the latest bundle and restarts fabric-agent. It
+        MUST run outside this service's cgroup, otherwise `systemctl restart
+        fabric-agent` (performed by the updater) would kill the updater
+        mid-flight. We use `systemd-run --scope` for that isolation, falling
+        back to a detached subprocess when systemd-run isn't available.
+
+        Running through the package updater (not the raw shell script) means the
+        outcome is written to state_dir/last-update.json, which the freshly
+        restarted agent reports back to the manager on its next heartbeat.
+        """
         if self.cfg.dry_run:
-            log.info("[dry-run] would self-update via %s", updater)
+            log.info("[dry-run] would self-update")
             return
-        if not os.path.exists(updater):
-            log.warning("update requested but updater not found at %s", updater)
-            return
-        log.info("update requested by manager; launching %s", updater)
+        agent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        py = sys.executable or "python3"
+        update_cmd = [py, "-m", "fabric_agent", "update"]
+        log.info("update requested by manager; launching self-update")
         try:
-            subprocess.Popen(["sudo", "-n", updater],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True)
+            if shutil.which("systemd-run"):
+                subprocess.Popen(
+                    ["systemd-run", "--scope", "--quiet",
+                     "--collect", f"--setenv=PYTHONPATH={agent_dir}"] + update_cmd,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            else:
+                env = {**os.environ, "PYTHONPATH": agent_dir}
+                subprocess.Popen(update_cmd, cwd=agent_dir, env=env,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
         except Exception as e:  # noqa: BLE001
             log.warning("self-update launch failed: %s", e)
 
