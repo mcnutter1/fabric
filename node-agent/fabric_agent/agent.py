@@ -24,6 +24,7 @@ from typing import Optional
 from . import __version__
 from .classify import Classifier, sample_simulated_dns, sample_simulated_flow
 from .config import AgentConfig, AgentState
+from .certs import CertManager
 from .dataplane import DataPlane
 from .dns_filter import DNSResolver
 from .manager import ManagerClient
@@ -48,6 +49,7 @@ class FabricAgent:
         self.dns: Optional[DNSResolver] = None
         self.policy: Optional[PolicyBundle] = None
         self.inspector = None
+        self.certs = CertManager(self)
         self.roles: list = []
         self._stop = threading.Event()
 
@@ -107,6 +109,11 @@ class FabricAgent:
         self.dp.set_address(cfg.get("interface", {}).get("address", ""))
         self.dp.apply_routing(cfg.get("routing", {}))
         self._apply_roles(cfg)
+        # Obtain/refresh a trusted Let's Encrypt cert for our assigned hostname.
+        try:
+            self.certs.apply(cfg.get("tls"))
+        except Exception as e:  # noqa: BLE001
+            log.warning("TLS provisioning failed: %s", e)
         self.state.last_config_version = version
         self.state.save(self.cfg.state_file)
 

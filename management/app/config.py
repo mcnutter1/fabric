@@ -46,8 +46,21 @@ class Settings(BaseSettings):
     endpoint_cidr: str = "100.64.0.0/12"
     wg_port: int = 51820
 
-    # AWS Route53
+    # AWS Route53 + automatic node DNS / TLS
+    aws_region: str = "us-east-1"
     route53_zone_id: str = ""
+    # Base domain under which each node gets an A record (e.g. "fab.mcnutt.cloud"
+    # -> aws-egress-1.fab.mcnutt.cloud). Empty disables auto DNS/TLS for nodes.
+    node_base_domain: str = ""
+    # Contact e-mail used when a node requests a Let's Encrypt certificate.
+    acme_email: str = ""
+    # Master switch: provision Route53 DNS + trigger node Let's Encrypt on enroll.
+    node_acme_enabled: bool = False
+
+    @property
+    def node_dns_enabled(self) -> bool:
+        return bool(self.route53_zone_id and self.node_base_domain)
+
 
     @property
     def admin_roles(self) -> List[str]:

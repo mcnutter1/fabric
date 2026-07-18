@@ -76,6 +76,7 @@ class FabricOrchestrator:
                     "status": n.status,
                     "fabric_addr": n.fabric_addr,
                     "public_endpoint": n.public_endpoint,
+                    "hostname": n.hostname,
                     "health": n.health,
                 }
                 for n in nodes
@@ -147,6 +148,12 @@ class FabricOrchestrator:
             "peers": peers,
             "routing": routing,
             "egress_ip_pool": node.egress_ip_pool or [],
+            "tls": {
+                "enabled": bool(settings.node_acme_enabled and node.hostname),
+                "hostname": node.hostname or "",
+                "email": settings.acme_email or "",
+                "provider": "letsencrypt",
+            },
             "target_version": node.target_version or node.version,
         }
         config["version"] = self._config_hash(config)

@@ -49,9 +49,9 @@ if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq wireguard wireguard-tools iproute2 iptables \
-                         python3 python3-pip git curl ca-certificates
+                         python3 python3-pip git curl ca-certificates certbot
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y -q wireguard-tools iproute iptables python3 python3-pip git curl ca-certificates
+  dnf install -y -q wireguard-tools iproute iptables python3 python3-pip git curl ca-certificates certbot
 else
   die "unsupported package manager (need apt-get or dnf)"
 fi

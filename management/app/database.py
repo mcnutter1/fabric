@@ -47,6 +47,9 @@ def init_db() -> None:
 # create_all() never ALTERs an existing table, so we patch them in by hand.
 # Keep entries idempotent: {table: {column: "<sql type + default>"}}.
 _ADDED_COLUMNS = {
+    "nodes": {
+        "hostname": "VARCHAR(255) DEFAULT ''",
+    },
     "flow_records": {
         "meta": "JSON",
         "duration_ms": "INTEGER DEFAULT 0",

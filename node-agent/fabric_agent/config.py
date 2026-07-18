@@ -47,6 +47,7 @@ class AgentConfig:
     simulate: bool = False                # emit synthetic telemetry (demo / no real traffic)
     advertised_endpoint: str = ""         # public ip:port override
     updater_path: str = "/opt/fabric/scripts/update.sh"  # invoked on manager update signal
+    acme_http_port: int = 80              # http-01 challenge port for certbot standalone
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
@@ -63,6 +64,7 @@ class AgentConfig:
             dry_run=e("FABRIC_AGENT_DRY_RUN", "0") == "1",
             simulate=e("FABRIC_AGENT_SIMULATE", "0") == "1",
             updater_path=e("FABRIC_UPDATER", "/opt/fabric/scripts/update.sh"),
+            acme_http_port=int(e("FABRIC_AGENT_ACME_HTTP_PORT", "80")),
         )
         sd = e("FABRIC_AGENT_STATE_DIR", "")
         if sd:
@@ -95,6 +97,11 @@ class AgentConfig:
     def mitm_ca_file(self) -> Path:
         return self.state_dir / "mitm-ca.pem"
 
+    @property
+    def tls_dir(self) -> Path:
+        """Where the node's Let's Encrypt cert/key are linked for role use."""
+        return self.state_dir / "tls"
+
 
 @dataclass
 class AgentState:
@@ -107,6 +114,7 @@ class AgentState:
     wg_public_key: str = ""
     last_config_version: str = ""
     enrolled: bool = False
+    tls_hostname: str = ""  # FQDN a Let's Encrypt cert was last obtained for
 
     @classmethod
     def load(cls, path: Path) -> "AgentState":

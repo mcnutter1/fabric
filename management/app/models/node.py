@@ -30,6 +30,7 @@ class Node(Base):
     wg_public_key: Mapped[str] = mapped_column(String(64), default="")
     wg_listen_port: Mapped[int] = mapped_column(Integer, default=51820)
     public_endpoint: Mapped[str] = mapped_column(String(255), default="")  # host:port reachable by peers
+    hostname: Mapped[str] = mapped_column(String(255), default="")  # auto-provisioned FQDN (Route53) for TLS
 
     # Role-specific config
     endpoint_pool_cidr: Mapped[str] = mapped_column(String(64), default="")   # ingress: pool for clients

@@ -15,6 +15,7 @@ from ..models.enums import NodeStatus
 from ..schemas import NodeCreate, NodeUpdate, NodeOut, PairingOut
 from ..services.fabric import FabricOrchestrator
 from ..services.wireguard import AddressAllocator
+from ..services.dns import Route53Service
 from ..util import new_id, gen_pairing_code, gen_token, utcnow, audit
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
@@ -79,6 +80,9 @@ def delete_node(node_id: str, db: Session = Depends(get_db), admin: Principal = 
     node = db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "node not found")
+    # Best-effort DNS cleanup for the auto-provisioned hostname.
+    if node.hostname and node.public_endpoint:
+        Route53Service().delete_a(node.hostname, node.public_endpoint.split(":")[0])
     db.delete(node)
     db.commit()
     audit(db, actor=admin.email, actor_type="user", action="node.delete", target=node_id)

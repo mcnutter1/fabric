@@ -16,6 +16,7 @@ from ..schemas import NodeEnrollRequest, NodeEnrollResponse, NodeHeartbeat
 from ..services.fabric import FabricOrchestrator
 from ..services.policy_engine import PolicyEngine
 from ..services.pki import PKIService
+from ..services.dns import Route53Service, node_fqdn
 from ..realtime import hub
 from ..util import gen_token, utcnow, audit
 
@@ -37,12 +38,22 @@ def enroll(body: NodeEnrollRequest, request: Request, db: Session = Depends(get_
     # The node's reachable address is discovered at registration time, not
     # entered by an operator during onboarding: prefer what the node advertises,
     # otherwise fall back to the source IP the manager observed for this request.
+    observed_ip = request.client.host if request.client else ""
     if body.advertised_endpoint:
         node.public_endpoint = body.advertised_endpoint
-    elif not node.public_endpoint and request.client:
-        node.public_endpoint = f"{request.client.host}:{node.wg_listen_port}"
+    elif not node.public_endpoint and observed_ip:
+        node.public_endpoint = f"{observed_ip}:{node.wg_listen_port}"
     node.status = NodeStatus.online.value
     node.last_seen = utcnow()
+
+    # Auto-provision DNS (Route53) so the node has a stable, trusted hostname the
+    # data plane can obtain a Let's Encrypt certificate for. Best-effort: if DNS
+    # isn't configured this is a no-op and enrollment proceeds unchanged.
+    public_ip = (node.public_endpoint.split(":")[0] if node.public_endpoint else "") or observed_ip
+    fqdn = node_fqdn(node.name)
+    if fqdn and public_ip:
+        if Route53Service().upsert_a(fqdn, public_ip):
+            node.hostname = fqdn
 
     # Issue a long-lived node token.
     token = gen_token("node_")
@@ -50,7 +61,7 @@ def enroll(body: NodeEnrollRequest, request: Request, db: Session = Depends(get_
 
     # Issue an infrastructure identity certificate for mTLS.
     pki = PKIService(db)
-    sans = [node.name, node.fabric_addr]
+    sans = [node.name, node.fabric_addr, node.hostname]
     if node.public_endpoint:
         sans.append(node.public_endpoint.split(":")[0])
     issued = pki.issue_node_cert(node.id, cn=node.name, sans=[s for s in sans if s])

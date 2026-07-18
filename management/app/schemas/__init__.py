@@ -40,6 +40,7 @@ class NodeOut(BaseModel):
     wg_public_key: str
     wg_listen_port: int
     public_endpoint: str
+    hostname: str
     endpoint_pool_cidr: str
     egress_ip_pool: list[str]
     private_routes: list[str]
