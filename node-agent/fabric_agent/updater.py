@@ -110,6 +110,22 @@ def _install_unit(prefix: Path) -> None:
         log.warning("could not reinstall systemd unit: %s", e)
 
 
+def _install_wrapper(prefix: Path) -> None:
+    """(Re)install the `fabric-agent` CLI wrapper in PATH so `fabric-agent
+    update` works from any directory."""
+    wrapper = prefix / "scripts" / "fabric-agent"
+    if not wrapper.exists():
+        return
+    try:
+        os.chmod(wrapper, 0o755)
+        link = Path("/usr/local/bin/fabric-agent")
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(wrapper)
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not install fabric-agent wrapper: %s", e)
+
+
 def _pip_install(prefix: Path) -> None:
     req = prefix / "node-agent" / "requirements.txt"
     if not req.exists():
@@ -163,6 +179,7 @@ def run_update(cfg: AgentConfig, restart: bool = True) -> int:
         prefix.mkdir(parents=True, exist_ok=True)
         _copy_tree(stage, prefix)
         _install_unit(prefix)
+        _install_wrapper(prefix)
         _pip_install(prefix)
     except Exception as e:  # noqa: BLE001
         log.error("update failed: %s", e)

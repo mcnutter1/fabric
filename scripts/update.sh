@@ -89,6 +89,12 @@ update_from_bundle() {
       /etc/systemd/system/fabric-agent.service
     systemctl daemon-reload
   fi
+
+  # Expose the `fabric-agent` CLI wrapper so `fabric-agent update` works anywhere.
+  if [[ -f "$PREFIX/scripts/fabric-agent" ]]; then
+    chmod +x "$PREFIX/scripts/fabric-agent"
+    ln -sf "$PREFIX/scripts/fabric-agent" /usr/local/bin/fabric-agent
+  fi
 }
 
 restart_if_active() {

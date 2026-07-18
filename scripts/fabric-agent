@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Fabric node agent wrapper. Runs `python3 -m fabric_agent` from the correct
+# working directory so it works regardless of the caller's cwd, e.g.:
+#   sudo fabric-agent update
+#   sudo fabric-agent --version
+# Installed to /usr/local/bin/fabric-agent by install-node.sh / the updater.
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+PREFIX="$(cd "$(dirname "$SELF")/.." && pwd)"
+AGENT_DIR="$PREFIX/node-agent"
+
+if [[ ! -d "$AGENT_DIR/fabric_agent" ]]; then
+  # Fall back to the default install location.
+  AGENT_DIR="/opt/fabric/node-agent"
+fi
+if [[ ! -d "$AGENT_DIR/fabric_agent" ]]; then
+  echo "fabric-agent: package not found under $AGENT_DIR" >&2
+  exit 1
+fi
+
+# Load agent environment (manager URL, TLS settings) if present.
+if [[ -f /etc/fabric/agent.env ]]; then
+  set -a; . /etc/fabric/agent.env; set +a
+fi
+
+cd "$AGENT_DIR"
+exec python3 -m fabric_agent "$@"

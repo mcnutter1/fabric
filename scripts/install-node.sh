@@ -127,6 +127,14 @@ FABRIC_AGENT_ENDPOINT=$ADVERTISED
 EOF
 chmod 600 "$ENV_FILE"
 
+# --- agent CLI ---------------------------------------------------------
+# Expose the `fabric-agent` wrapper so operators can run it from anywhere
+# (e.g. `sudo fabric-agent update`) without worrying about the cwd.
+if [[ -f "$PREFIX/scripts/fabric-agent" ]]; then
+  chmod +x "$PREFIX/scripts/fabric-agent"
+  ln -sf "$PREFIX/scripts/fabric-agent" /usr/local/bin/fabric-agent
+fi
+
 # --- systemd -----------------------------------------------------------
 log "installing systemd unit"
 install -m 644 "$PREFIX/deploy/systemd/fabric-agent.service" /etc/systemd/system/fabric-agent.service
