@@ -82,3 +82,8 @@ class ManagerClient:
         if not logs:
             return {"ok": True, "stored": 0}
         return self._post("/node/dns", logs)
+
+    def report_endpoints(self, endpoints: list[dict]) -> dict:
+        if not endpoints:
+            return {"ok": True, "stored": 0}
+        return self._post("/node/endpoints", endpoints)

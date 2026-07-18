@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import Node, FabricLink, Endpoint
-from ..models.enums import NodeRole, NodeStatus, LinkStatus
+from ..models.enums import NodeRole, NodeStatus, LinkStatus, EndpointStatus
 
 
 def _roles(node: Node) -> set[str]:
@@ -92,6 +92,41 @@ class FabricOrchestrator:
         }
 
     # ------------------------------------------------------------------ per-node config
+    def _endpoint_peers(self, node: Node) -> tuple[list[dict], list[dict]]:
+        """For an ingress node, its client endpoints become WireGuard peers so
+        their tunnels actually terminate here. Returns (peers, endpoints) where
+        `endpoints` is the pubkey->identity map the agent uses to attribute
+        per-endpoint connection stats. Revoked endpoints are excluded."""
+        if NodeRole.ingress.value not in _roles(node):
+            return [], []
+        peers: list[dict] = []
+        endpoints: list[dict] = []
+        rows = self.db.scalars(
+            select(Endpoint).where(Endpoint.ingress_node_id == node.id)
+        )
+        for ep in rows:
+            if ep.status == EndpointStatus.revoked.value:
+                continue
+            if not (ep.wg_public_key and ep.address):
+                continue
+            allowed = [f"{ep.address}/32"]
+            peers.append({
+                "kind": "endpoint",
+                "endpoint_id": ep.id,
+                "name": ep.name,
+                "public_key": ep.wg_public_key,
+                "preshared_key": ep.preshared_key or "",
+                "allowed_ips": allowed,
+            })
+            endpoints.append({
+                "endpoint_id": ep.id,
+                "name": ep.name,
+                "public_key": ep.wg_public_key,
+                "address": ep.address,
+                "user": ep.user_email or ep.user_uid or "",
+            })
+        return peers, endpoints
+
     def compute_node_config(self, node: Node) -> dict:
         peers = []
         others = [n for n in self._active_nodes() if n.id != node.id and n.wg_public_key]
@@ -125,6 +160,10 @@ class FabricOrchestrator:
                 "persistent_keepalive": 25,
             })
 
+        # Client endpoints terminate on their ingress node as wg peers.
+        endpoint_peers, endpoint_map = self._endpoint_peers(node)
+        peers.extend(endpoint_peers)
+
         routing = {
             "endpoint_pool": node.endpoint_pool_cidr or None,
             "egress": (
@@ -148,6 +187,7 @@ class FabricOrchestrator:
             "peers": peers,
             "routing": routing,
             "egress_ip_pool": node.egress_ip_pool or [],
+            "endpoints": endpoint_map,
             "tls": {
                 "enabled": bool(settings.node_acme_enabled and node.hostname),
                 "hostname": node.hostname or "",

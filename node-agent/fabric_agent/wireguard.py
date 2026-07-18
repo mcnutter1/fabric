@@ -44,15 +44,24 @@ def render_wg_conf(state, config: dict) -> str:
     for peer in config.get("peers", []):
         if not peer.get("public_key"):
             continue
-        lines.append(f"# {peer.get('name', peer.get('node_id'))} [{','.join(peer.get('roles') or [])}]")
+        is_endpoint = peer.get("kind") == "endpoint"
+        label = peer.get("name") or peer.get("endpoint_id") or peer.get("node_id")
+        if is_endpoint:
+            lines.append(f"# endpoint {label}")
+        else:
+            lines.append(f"# {label} [{','.join(peer.get('roles') or [])}]")
         lines.append("[Peer]")
         lines.append(f"PublicKey = {peer['public_key']}")
+        if peer.get("preshared_key"):
+            lines.append(f"PresharedKey = {peer['preshared_key']}")
         allowed = peer.get("allowed_ips") or []
         if allowed:
             lines.append(f"AllowedIPs = {', '.join(allowed)}")
         if peer.get("endpoint"):
             lines.append(f"Endpoint = {peer['endpoint']}")
-        lines.append(f"PersistentKeepalive = {peer.get('persistent_keepalive', 25)}")
+        # Client endpoints dial us; only mesh peers get persistent keepalive.
+        if not is_endpoint:
+            lines.append(f"PersistentKeepalive = {peer.get('persistent_keepalive', 25)}")
         lines.append("")
 
     return "\n".join(lines) + "\n"

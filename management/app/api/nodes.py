@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from sqlalchemy import select, desc, func, or_
 from sqlalchemy.orm import Session
 
 from ..auth import Principal, require_admin
 from ..config import settings
 from ..database import get_db
-from ..models import Node, PairingCode
-from ..models.enums import NodeStatus
+from ..models import Node, PairingCode, FabricLink, Endpoint, FlowRecord
+from ..models.enums import NodeStatus, NodeRole
 from ..schemas import NodeCreate, NodeUpdate, NodeOut, PairingOut
 from ..services.fabric import FabricOrchestrator
 from ..services.wireguard import AddressAllocator
@@ -134,3 +134,82 @@ def node_config(node_id: str, db: Session = Depends(get_db), _: Principal = Depe
     if not node:
         raise HTTPException(404, "node not found")
     return FabricOrchestrator(db).compute_node_config(node)
+
+
+@router.get("/{node_id}/detail")
+def node_detail(node_id: str, db: Session = Depends(get_db),
+                _: Principal = Depends(require_admin),
+                flow_limit: int = Query(50, le=500)):
+    """Node drill-down: health, live peer links, attached endpoints (ingress),
+    recent traffic through the node, and 24h traffic totals."""
+    node = db.get(Node, node_id)
+    if not node:
+        raise HTTPException(404, "node not found")
+
+    names = {n.id: n.name for n in db.scalars(select(Node))}
+    link_rows = db.scalars(
+        select(FabricLink).where(or_(FabricLink.node_a == node_id, FabricLink.node_b == node_id))
+    )
+    links = []
+    for l in link_rows:
+        peer_id = l.node_b if l.node_a == node_id else l.node_a
+        links.append({
+            "peer_id": peer_id, "peer_name": names.get(peer_id, peer_id),
+            "status": l.status, "latency_ms": l.latency_ms, "loss_pct": l.loss_pct,
+            "tx_bytes": l.tx_bytes, "rx_bytes": l.rx_bytes,
+            "last_handshake": l.last_handshake,
+        })
+
+    endpoints = []
+    if NodeRole.ingress.value in (node.roles or []):
+        for e in db.scalars(select(Endpoint).where(Endpoint.ingress_node_id == node_id)
+                            .order_by(Endpoint.name)):
+            conn = (e.meta or {}).get("conn") or {}
+            endpoints.append({
+                "id": e.id, "name": e.name, "status": e.status, "address": e.address,
+                "user": e.user_email or e.user_uid, "last_seen": e.last_seen,
+                "connected": bool(conn.get("connected")),
+                "rx_bytes": conn.get("rx_bytes", 0), "tx_bytes": conn.get("tx_bytes", 0),
+            })
+
+    flows = db.scalars(
+        select(FlowRecord).where(or_(FlowRecord.node_id == node_id,
+                                     FlowRecord.egress_node_id == node_id))
+        .order_by(desc(FlowRecord.ts)).limit(flow_limit)
+    )
+    flow_rows = [
+        {"id": r.id, "ts": r.ts, "endpoint_id": r.endpoint_id, "src_ip": r.src_ip,
+         "dst_ip": r.dst_ip, "dst_port": r.dst_port, "domain": r.domain, "sni": r.sni,
+         "category": r.category, "country": r.country, "verdict": r.verdict,
+         "egress_ip": r.egress_ip, "tx_bytes": r.tx_bytes, "rx_bytes": r.rx_bytes}
+        for r in flows
+    ]
+
+    since = utcnow() - dt.timedelta(hours=24)
+    tx = db.scalar(select(func.coalesce(func.sum(FlowRecord.tx_bytes), 0))
+                   .where(or_(FlowRecord.node_id == node_id, FlowRecord.egress_node_id == node_id),
+                          FlowRecord.ts >= since)) or 0
+    rx = db.scalar(select(func.coalesce(func.sum(FlowRecord.rx_bytes), 0))
+                   .where(or_(FlowRecord.node_id == node_id, FlowRecord.egress_node_id == node_id),
+                          FlowRecord.ts >= since)) or 0
+    flows_24h = db.scalar(select(func.count()).select_from(FlowRecord)
+                          .where(or_(FlowRecord.node_id == node_id, FlowRecord.egress_node_id == node_id),
+                                 FlowRecord.ts >= since)) or 0
+
+    return {
+        "node": {
+            "id": node.id, "name": node.name, "roles": node.roles or [],
+            "region": node.region, "status": node.status, "fabric_addr": node.fabric_addr,
+            "public_endpoint": node.public_endpoint, "hostname": node.hostname,
+            "version": node.version, "target_version": node.target_version,
+            "last_seen": node.last_seen, "health": node.health or {},
+            "endpoint_pool_cidr": node.endpoint_pool_cidr,
+            "egress_ip_pool": node.egress_ip_pool or [],
+            "private_routes": node.private_routes or [],
+        },
+        "links": links,
+        "endpoints": endpoints,
+        "flows": flow_rows,
+        "totals": {"tx_bytes": int(tx), "rx_bytes": int(rx), "flows_24h": int(flows_24h)},
+    }
+

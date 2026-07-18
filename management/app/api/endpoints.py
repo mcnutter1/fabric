@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
 from ..auth import Principal, require_admin
 from ..database import get_db
-from ..models import Endpoint, Node
+from ..models import Endpoint, Node, FlowRecord, DnsLog, AuditLog
 from ..models.enums import NodeRole, EndpointStatus, EndpointProtocol
 from ..schemas import EndpointCreate, EndpointOut, EndpointBundleOut
 from ..services import config_gen
@@ -18,6 +18,37 @@ from ..services.wireguard import generate_keypair, generate_preshared_key, Addre
 from ..util import new_id, audit
 
 router = APIRouter(prefix="/endpoints", tags=["endpoints"])
+
+
+def _endpoint_dict(ep: Endpoint) -> dict:
+    """Public serialisation including live connection detail (from meta.conn)."""
+    conn = (ep.meta or {}).get("conn") or {}
+    return {
+        "id": ep.id,
+        "name": ep.name,
+        "user_uid": ep.user_uid,
+        "user_email": ep.user_email,
+        "user_name": ep.user_name,
+        "protocol": ep.protocol,
+        "os": ep.os,
+        "status": ep.status,
+        "ingress_node_id": ep.ingress_node_id,
+        "address": ep.address,
+        "wg_public_key": ep.wg_public_key,
+        "inspect_tls": ep.inspect_tls,
+        "tags": ep.tags or [],
+        "last_seen": ep.last_seen,
+        "created_at": ep.created_at,
+        "conn": {
+            "connected": bool(conn.get("connected")),
+            "last_handshake": conn.get("last_handshake", 0),
+            "handshake_age": conn.get("handshake_age"),
+            "rx_bytes": conn.get("rx_bytes", 0),
+            "tx_bytes": conn.get("tx_bytes", 0),
+            "remote_ip": conn.get("remote_ip", ""),
+        },
+    }
+
 
 
 def _pick_ingress(db: Session, preferred: Optional[str]) -> Node:
@@ -42,9 +73,9 @@ def _allocate_endpoint_addr(db: Session, ingress: Node) -> str:
     return AddressAllocator(cidr).allocate(used)
 
 
-@router.get("", response_model=list[EndpointOut])
+@router.get("")
 def list_endpoints(db: Session = Depends(get_db), _: Principal = Depends(require_admin)):
-    return list(db.scalars(select(Endpoint).order_by(Endpoint.name)))
+    return [_endpoint_dict(e) for e in db.scalars(select(Endpoint).order_by(Endpoint.name))]
 
 
 @router.post("", response_model=EndpointOut, status_code=201)
@@ -84,6 +115,77 @@ def get_endpoint(endpoint_id: str, db: Session = Depends(get_db), _: Principal =
     if not ep:
         raise HTTPException(404, "endpoint not found")
     return ep
+
+
+@router.get("/{endpoint_id}/detail")
+def endpoint_detail(endpoint_id: str, db: Session = Depends(get_db),
+                    _: Principal = Depends(require_admin),
+                    flow_limit: int = Query(50, le=500)):
+    """Full endpoint drill-down: identity, connection state, the ingress it
+    terminates on, and its recent traffic / DNS / management activity."""
+    ep = db.get(Endpoint, endpoint_id)
+    if not ep:
+        raise HTTPException(404, "endpoint not found")
+
+    ingress = db.get(Node, ep.ingress_node_id) if ep.ingress_node_id else None
+    ingress_out = None
+    if ingress:
+        ingress_out = {
+            "id": ingress.id, "name": ingress.name, "roles": ingress.roles or [],
+            "region": ingress.region, "status": ingress.status,
+            "public_endpoint": ingress.public_endpoint, "hostname": ingress.hostname,
+        }
+
+    flows = db.scalars(
+        select(FlowRecord).where(FlowRecord.endpoint_id == endpoint_id)
+        .order_by(desc(FlowRecord.ts)).limit(flow_limit)
+    )
+    flow_rows = [
+        {"id": r.id, "ts": r.ts, "dst_ip": r.dst_ip, "dst_port": r.dst_port,
+         "domain": r.domain, "sni": r.sni, "category": r.category, "app": r.app,
+         "country": r.country, "isp": r.isp, "verdict": r.verdict,
+         "egress_ip": r.egress_ip, "tx_bytes": r.tx_bytes, "rx_bytes": r.rx_bytes}
+        for r in flows
+    ]
+
+    dns = db.scalars(
+        select(DnsLog).where(DnsLog.endpoint_id == endpoint_id)
+        .order_by(desc(DnsLog.ts)).limit(flow_limit)
+    )
+    dns_rows = [
+        {"id": r.id, "ts": r.ts, "qname": r.qname, "qtype": r.qtype,
+         "answer": r.answer, "category": r.category, "action": r.action}
+        for r in dns
+    ]
+
+    activity = db.scalars(
+        select(AuditLog).where(AuditLog.target == endpoint_id)
+        .order_by(desc(AuditLog.ts)).limit(50)
+    )
+    activity_rows = [
+        {"ts": a.ts, "actor": a.actor, "actor_type": a.actor_type,
+         "action": a.action, "detail": a.detail or {}}
+        for a in activity
+    ]
+
+    # 24h traffic totals for this endpoint.
+    from sqlalchemy import func
+    tx = db.scalar(select(func.coalesce(func.sum(FlowRecord.tx_bytes), 0))
+                   .where(FlowRecord.endpoint_id == endpoint_id)) or 0
+    rx = db.scalar(select(func.coalesce(func.sum(FlowRecord.rx_bytes), 0))
+                   .where(FlowRecord.endpoint_id == endpoint_id)) or 0
+    flow_count = db.scalar(select(func.count()).select_from(FlowRecord)
+                           .where(FlowRecord.endpoint_id == endpoint_id)) or 0
+
+    return {
+        "endpoint": _endpoint_dict(ep),
+        "ingress": ingress_out,
+        "totals": {"tx_bytes": int(tx), "rx_bytes": int(rx), "flows": int(flow_count)},
+        "flows": flow_rows,
+        "dns": dns_rows,
+        "activity": activity_rows,
+    }
+
 
 
 @router.delete("/{endpoint_id}", status_code=204)

@@ -63,6 +63,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>
       DNS &amp; Web
     </div>
+    <div class="nav-item" data-view="activity">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v16M4 8h5M4 14h8M4 19h6"/><circle cx="17" cy="7" r="2"/><circle cx="19" cy="15" r="2"/></svg>
+      Activity Log
+    </div>
     <div class="nav-item" data-view="pki">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="12" r="5"/><path d="M13 12h8M17 12v4M21 12v3"/></svg>
       PKI &amp; Certificates
@@ -133,7 +137,7 @@
       <div class="view-head"><div><h1>Endpoints</h1><p>Client devices. Choose OS + protocol, generate config.</p></div>
         <button class="btn primary" onclick="Fabric.openEndpointModal()">+ New endpoint</button></div>
       <div class="panel"><table class="data" id="endpointsTable">
-        <thead><tr><th>Name</th><th>User</th><th>OS</th><th>Protocol</th><th>Address</th><th>Inspect</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>User</th><th>OS</th><th>Protocol</th><th>Address</th><th>Connection</th><th>Data (rx/tx)</th><th>Last seen</th><th>Inspect</th><th>Status</th><th></th></tr></thead>
         <tbody></tbody></table></div>
     </section>
 
@@ -159,6 +163,23 @@
         <span class="conn live"><span class="dot"></span>live</span></div>
       <div class="panel"><table class="data compact" id="dnsTable">
         <thead><tr><th>Time</th><th>Client</th><th>Query</th><th>Type</th><th>Answer</th><th>Category</th><th>Action</th></tr></thead>
+        <tbody></tbody></table></div>
+    </section>
+
+    <!-- Activity Log -->
+    <section class="view" id="view-activity">
+      <div class="view-head"><div><h1>Activity Log</h1><p>Every management and control-plane action, newest first.</p></div>
+        <div class="flex gap">
+          <select class="input sm" id="activityActorFilter" onchange="Fabric.loadActivity()">
+            <option value="">All actors</option>
+            <option value="user">Operators</option>
+            <option value="node">Nodes</option>
+            <option value="system">System</option>
+          </select>
+          <input class="input sm" id="activitySearch" placeholder="Search actor / action / target" oninput="Fabric.debouncedActivity()" />
+          <button class="btn" onclick="Fabric.loadActivity()">Refresh</button></div></div>
+      <div class="panel"><table class="data compact" id="activityTable">
+        <thead><tr><th>Time</th><th>Actor</th><th>Type</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
         <tbody></tbody></table></div>
     </section>
 

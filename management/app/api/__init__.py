@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 
 from . import auth as auth_routes
-from . import nodes, enroll, endpoints, policy, pki, fabric, telemetry, ws
+from . import nodes, enroll, endpoints, policy, pki, fabric, telemetry, ws, logs
 
 api_router = APIRouter()
 api_router.include_router(auth_routes.router)
@@ -13,5 +13,6 @@ api_router.include_router(policy.router)
 api_router.include_router(pki.router)
 api_router.include_router(fabric.router)
 api_router.include_router(telemetry.router)
+api_router.include_router(logs.router)
 
 __all__ = ["api_router", "ws"]

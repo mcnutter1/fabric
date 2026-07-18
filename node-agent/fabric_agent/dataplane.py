@@ -242,8 +242,10 @@ class DataPlane:
                 tx = int(cols[6])
             except ValueError:
                 continue
+            endpoint = cols[2] if cols[2] and cols[2] != "(none)" else ""
             stats[pubkey] = {
                 "rx": rx, "tx": tx,
+                "endpoint": endpoint,
                 "last_handshake": last_hs,
                 "last_handshake_ok": last_hs > 0,
             }

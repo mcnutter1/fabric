@@ -122,6 +122,16 @@ class DnsIngest(BaseModel):
     meta: dict = Field(default_factory=dict)
 
 
+class EndpointStatIngest(BaseModel):
+    """Per-endpoint WireGuard connection stats reported by an ingress node."""
+    endpoint_id: str = ""
+    wg_public_key: str = ""
+    last_handshake: int = 0     # unix epoch seconds (0 = never)
+    rx_bytes: int = 0
+    tx_bytes: int = 0
+    remote_ip: str = ""         # host:port the client dialed from
+
+
 # ------------------------------------------------------------------ Endpoints
 class EndpointCreate(BaseModel):
     name: str

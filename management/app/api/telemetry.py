@@ -10,21 +10,38 @@ from sqlalchemy.orm import Session
 from ..auth import Principal, require_admin, require_node
 from ..database import get_db
 from ..models import FlowRecord, DnsLog, Node, Endpoint
-from ..schemas import FlowIngest, DnsIngest
+from ..models.enums import EndpointStatus
+from ..schemas import FlowIngest, DnsIngest, EndpointStatIngest
 from ..realtime import hub
+from ..util import utcnow
 
 router = APIRouter(tags=["telemetry"])
+
+# A handshake newer than this many seconds means the endpoint is actively connected.
+_ACTIVE_HANDSHAKE_SEC = 180
 
 
 # ------------------------------------------------------------------ ingestion (nodes)
 @router.post("/node/flows")
 async def ingest_flows(flows: list[FlowIngest], node: Node = Depends(require_node),
                        db: Session = Depends(get_db)):
+    # Map endpoint overlay IPs -> endpoint so egress-observed flows (which only
+    # carry a src_ip) get attributed to the client that generated them.
+    ep_by_addr = {
+        e.address: e for e in db.scalars(select(Endpoint).where(Endpoint.address != ""))
+    }
     stored = []
     for f in flows:
-        rec = FlowRecord(node_id=node.id, **f.model_dump())
+        data = f.model_dump()
+        if not data.get("endpoint_id") and data.get("src_ip"):
+            ep = ep_by_addr.get(data["src_ip"])
+            if ep:
+                data["endpoint_id"] = ep.id
+                if not data.get("user_uid"):
+                    data["user_uid"] = ep.user_uid or ep.user_email
+        rec = FlowRecord(node_id=node.id, **data)
         db.add(rec)
-        stored.append(f.model_dump())
+        stored.append(data)
     db.commit()
     # Fan out to the live map (cap payload).
     for f in stored[:50]:
@@ -41,6 +58,51 @@ async def ingest_dns(logs: list[DnsIngest], node: Node = Depends(require_node),
     for d in logs[:50]:
         await hub.publish("dns", {"node_id": node.id, **d.model_dump()})
     return {"ok": True, "stored": len(logs)}
+
+
+@router.post("/node/endpoints")
+async def ingest_endpoint_stats(stats: list[EndpointStatIngest],
+                                node: Node = Depends(require_node),
+                                db: Session = Depends(get_db)):
+    """An ingress node reports live WireGuard connection stats for its client
+    endpoints. Updates each endpoint's status, last_seen and connection detail."""
+    now = utcnow()
+    now_epoch = int(now.timestamp())
+    updated = 0
+    for s in stats:
+        ep = None
+        if s.endpoint_id:
+            ep = db.get(Endpoint, s.endpoint_id)
+        if not ep and s.wg_public_key:
+            ep = db.scalar(select(Endpoint).where(Endpoint.wg_public_key == s.wg_public_key))
+        if not ep or ep.ingress_node_id != node.id:
+            continue
+        connected = bool(s.last_handshake) and (now_epoch - s.last_handshake) <= _ACTIVE_HANDSHAKE_SEC
+        conn = {
+            "connected": connected,
+            "last_handshake": s.last_handshake or 0,
+            "handshake_age": (now_epoch - s.last_handshake) if s.last_handshake else None,
+            "rx_bytes": s.rx_bytes,
+            "tx_bytes": s.tx_bytes,
+            "remote_ip": s.remote_ip,
+            "ingress_node_id": node.id,
+            "updated": now_epoch,
+        }
+        ep.meta = {**(ep.meta or {}), "conn": conn}
+        if s.last_handshake:
+            ep.last_seen = dt.datetime.fromtimestamp(s.last_handshake, dt.timezone.utc)
+        if ep.status != EndpointStatus.revoked.value:
+            ep.status = EndpointStatus.active.value if connected else (
+                EndpointStatus.idle.value if s.last_handshake else EndpointStatus.provisioned.value
+            )
+        updated += 1
+        await hub.publish("endpoint.state", {
+            "endpoint_id": ep.id, "name": ep.name, "status": ep.status,
+            "node_id": node.id, "conn": conn,
+        })
+    db.commit()
+    return {"ok": True, "updated": updated}
+
 
 
 # ------------------------------------------------------------------ queries (operators)

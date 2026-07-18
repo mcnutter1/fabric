@@ -105,6 +105,7 @@
           "<td class='mono muted'>" + (esc(n.public_endpoint) || "&mdash;") + "</td>" +
           "<td class='muted'>" + (esc(n.version) || "&mdash;") + "</td>" +
           "<td style='text-align:right'>" +
+          "<button class='btn sm ghost' onclick=\"Fabric.nodeDetail('" + n.id + "')\">Details</button> " +
           "<button class='btn sm' onclick=\"Fabric.pairNode('" + n.id + "','" + esc(n.name) + "')\">Pair</button> " +
           "<button class='btn sm ghost' onclick=\"Fabric.configureNode('" + n.id + "')\">Configure</button> " +
           "<button class='btn sm ghost' onclick=\"Fabric.viewNodeConfig('" + n.id + "')\">Config</button> " +
@@ -223,21 +224,31 @@
   // ----------------------------------------------------------------- endpoints
   const OS_OPTS = ["windows", "macos", "linux", "ios", "android", "router"];
   const PROTO_OPTS = ["wireguard", "ipsec_ikev2", "l2tp_ipsec", "openvpn"];
+  function connCell(e) {
+    const c = e.conn || {};
+    if (c.connected) return pill("connected", "allow");
+    if (e.last_seen) return pill("idle", "");
+    return "<span class='muted'>&mdash;</span>";
+  }
   function loadEndpoints() {
     api("/endpoints").done(function (eps) {
       $("#badgeEndpoints").text(eps.length);
       const rows = eps.map(function (e) {
-        return "<tr><td><strong>" + esc(e.name) + "</strong></td>" +
+        const c = e.conn || {};
+        return "<tr data-epid='" + e.id + "'><td><strong class='clickable' onclick=\"Fabric.endpointDetail('" + e.id + "')\">" + esc(e.name) + "</strong></td>" +
           "<td class='muted'>" + (esc(e.user_email || e.user_name) || "&mdash;") + "</td>" +
           "<td>" + esc(e.os) + "</td><td>" + esc(e.protocol) + "</td>" +
           "<td class='mono'>" + (esc(e.address) || "&mdash;") + "</td>" +
+          "<td>" + connCell(e) + "</td>" +
+          "<td class='mono muted'>" + fmtBytes(c.rx_bytes) + " / " + fmtBytes(c.tx_bytes) + "</td>" +
+          "<td class='muted'>" + (e.last_seen ? timeAgo(e.last_seen) : "never") + "</td>" +
           "<td>" + (e.inspect_tls ? pill("inspect", "inspect") : pill("bypass", "")) + "</td>" +
           "<td>" + pill(e.status, e.status) + "</td>" +
           "<td style='text-align:right'>" +
           "<button class='btn sm primary' onclick=\"Fabric.endpointConfig('" + e.id + "')\">Get config</button> " +
           "<button class='btn sm danger' onclick=\"Fabric.revokeEndpoint('" + e.id + "')\">Revoke</button></td></tr>";
       });
-      $("#endpointsTable tbody").html(rows.join("") || "<tr><td colspan='8' class='empty'>No endpoints yet</td></tr>");
+      $("#endpointsTable tbody").html(rows.join("") || "<tr><td colspan='11' class='empty'>No endpoints yet</td></tr>");
     });
   }
   function openEndpointModal() {
@@ -835,7 +846,19 @@
     }
     return { init: init, resize: resize, setTopology: setTopology, addPulse: addPulse, addFlow: addFlow, setFlows: setFlows };
   })();
-  function showNodeInfo(n) {
+  function showNodeInfo(n) { nodeDetail(n.id, n); }
+  function nodeDetail(id, fallback) {
+    api("/nodes/" + id + "/detail")
+      .done(function (d) { renderNodeDrawer(d); })
+      .fail(function () { if (fallback) renderNodeBasic(fallback); else toast("Failed to load node", "bad"); });
+  }
+  function nodeActions(id, name) {
+    return '<div class="flex gap mt"><button class="btn sm" onclick="Fabric.pairNode(\'' + id + "','" + esc(name) + '\')">Pair</button>' +
+      '<button class="btn sm ghost" onclick="Fabric.configureNode(\'' + id + '\')">Configure</button>' +
+      '<button class="btn sm ghost" onclick="Fabric.viewNodeConfig(\'' + id + '\')">Config</button>' +
+      '<button class="btn sm ghost" onclick="Fabric.updateNode(\'' + id + "','" + esc(name) + '\')">Update</button></div>';
+  }
+  function renderNodeBasic(n) {
     const roles = (n.roles || []).map(function (r) { return pill(ROLE_LABEL[r] || r, "role"); }).join(" ");
     const rows = kv("Region", n.region) + kv("Status", n.status) + kv("Fabric addr", n.fabric_addr) +
       kv("Public endpoint", n.public_endpoint) + kv("Version", n.version) +
@@ -843,10 +866,54 @@
     openDrawer(
       '<div class="modal-head"><h2>' + esc(n.name) + '</h2><span class="close-x" onclick="Fabric.closeDrawer()">&times;</span></div>' +
       '<div class="modal-body"><div>' + roles + '</div><h3 style="font-size:13px;margin-top:14px">Node</h3><div class="kvgrid">' + rows + "</div>" +
-      '<div class="flex gap mt"><button class="btn sm" onclick="Fabric.pairNode(\'' + n.id + "','" + esc(n.name) + '\')">Pair</button>' +
-      '<button class="btn sm ghost" onclick="Fabric.configureNode(\'' + n.id + '\')">Configure</button>' +
-      '<button class="btn sm ghost" onclick="Fabric.viewNodeConfig(\'' + n.id + '\')">Config</button>' +
-      '<button class="btn sm ghost" onclick="Fabric.updateNode(\'' + n.id + "','" + esc(n.name) + '\')">Update</button></div></div>'
+      nodeActions(n.id, n.name) + "</div>"
+    );
+  }
+  function renderNodeDrawer(d) {
+    const n = d.node || {}; const h = n.health || {}; const t = d.totals || {};
+    const roles = (n.roles || []).map(function (r) { return pill(ROLE_LABEL[r] || r, "role"); }).join(" ");
+    const info = kv("Region", n.region) + kv("Status", n.status) + kv("Fabric addr", n.fabric_addr) +
+      kv("Public endpoint", n.public_endpoint) + kv("Hostname", n.hostname) + kv("Version", n.version) +
+      kv("Last seen", n.last_seen ? timeAgo(n.last_seen) : "never") +
+      kv("Endpoint pool", n.endpoint_pool_cidr) + kv("Private routes", (n.private_routes || []).join(", ")) +
+      kv("Egress IPs", (n.egress_ip_pool || []).join(", "));
+    const healthRows = Object.keys(h).map(function (k) {
+      const v = (typeof h[k] === "object") ? JSON.stringify(h[k]) : h[k];
+      return kv(k, v);
+    }).join("");
+    const totalsRow = kv("Received (24h)", fmtBytes(t.rx_bytes)) + kv("Sent (24h)", fmtBytes(t.tx_bytes)) + kv("Flows (24h)", t.flows_24h);
+    const linksHtml = (d.links || []).length ? d.links.map(function (l) {
+      return "<tr><td><strong>" + esc(l.peer_name) + "</strong></td>" +
+        "<td>" + pill(l.status, l.status) + "</td>" +
+        "<td class='muted'>" + (l.latency_ms != null ? l.latency_ms + " ms" : "&mdash;") + "</td>" +
+        "<td class='muted'>" + (l.loss_pct != null ? l.loss_pct + "%" : "&mdash;") + "</td>" +
+        "<td class='mono'>" + fmtBytes((l.tx_bytes || 0) + (l.rx_bytes || 0)) + "</td></tr>";
+    }).join("") : "<tr><td colspan='5' class='empty'>No links</td></tr>";
+    const epsHtml = (d.endpoints || []).map(function (e) {
+      return "<tr class='clickable' onclick=\"Fabric.endpointDetail('" + e.id + "')\"><td><strong>" + esc(e.name) + "</strong></td>" +
+        "<td class='muted'>" + (esc(e.user) || "&mdash;") + "</td>" +
+        "<td>" + (e.connected ? pill("connected", "allow") : pill("offline", "")) + "</td>" +
+        "<td class='mono muted'>" + (esc(e.address) || "&mdash;") + "</td>" +
+        "<td class='mono'>" + fmtBytes((e.rx_bytes || 0) + (e.tx_bytes || 0)) + "</td></tr>";
+    }).join("");
+    const epsSection = epsHtml ? ('<h3 style="font-size:13px;margin-top:16px">Attached endpoints</h3><table class="data compact"><tbody>' + epsHtml + "</tbody></table>") : "";
+    const flowsHtml = (d.flows || []).length ? d.flows.map(function (f) {
+      return "<tr><td class='mono muted'>" + hhmmss(f.ts) + "</td>" +
+        "<td>" + esc(f.domain || f.sni || f.dst_ip) + "</td>" +
+        "<td>" + (f.category ? pill(f.category, "") : "<span class='muted'>&mdash;</span>") + "</td>" +
+        "<td class='mono'>" + fmtBytes((f.tx_bytes || 0) + (f.rx_bytes || 0)) + "</td></tr>";
+    }).join("") : "<tr><td colspan='4' class='empty'>No recent flows</td></tr>";
+    const healthSection = healthRows ? ('<h3 style="font-size:13px;margin-top:16px">Health</h3><div class="kvgrid">' + healthRows + "</div>") : "";
+    openDrawer(
+      '<div class="modal-head"><h2>' + esc(n.name) + '</h2><span class="close-x" onclick="Fabric.closeDrawer()">&times;</span></div>' +
+      '<div class="modal-body"><div>' + roles + "</div>" +
+      '<h3 style="font-size:13px;margin-top:14px">Node</h3><div class="kvgrid">' + info + "</div>" +
+      healthSection +
+      '<h3 style="font-size:13px;margin-top:16px">Traffic</h3><div class="kvgrid">' + totalsRow + "</div>" +
+      '<h3 style="font-size:13px;margin-top:16px">Fabric links</h3><table class="data compact"><tbody>' + linksHtml + "</tbody></table>" +
+      epsSection +
+      '<h3 style="font-size:13px;margin-top:16px">Recent flows</h3><table class="data compact"><tbody>' + flowsHtml + "</tbody></table>" +
+      nodeActions(n.id, n.name) + "</div>"
     );
   }
 
@@ -875,6 +942,75 @@
     return { render: render };
   })();
 
+  // ----------------------------------------------------------------- endpoint drill-down
+  function endpointDetail(id) {
+    api("/endpoints/" + id + "/detail").done(function (d) {
+      const e = d.endpoint || {}; const c = e.conn || {}; const ing = d.ingress; const t = d.totals || {};
+      const connState = c.connected ? pill("connected", "allow") : pill("offline", "");
+      const connRows = kv("Connected", c.connected ? "yes" : "no") +
+        kv("Last handshake", c.last_handshake ? timeAgo(c.last_handshake * 1000) : "never") +
+        kv("Remote IP", c.remote_ip) + kv("Received", fmtBytes(c.rx_bytes)) + kv("Sent", fmtBytes(c.tx_bytes)) +
+        kv("Overlay addr", e.address) + kv("Public key", e.wg_public_key) + kv("Last seen", e.last_seen ? timeAgo(e.last_seen) : "never");
+      const ingRows = ing ? (kv("Ingress node", ing.name) + kv("Region", ing.region) + kv("Ingress status", ing.status) + kv("Endpoint", ing.public_endpoint)) : "";
+      const totalsRow = kv("Total received", fmtBytes(t.rx_bytes)) + kv("Total sent", fmtBytes(t.tx_bytes)) + kv("Flows", t.flows);
+      const flowsHtml = (d.flows || []).length ? d.flows.map(function (f) {
+        return "<tr><td class='mono muted'>" + hhmmss(f.ts) + "</td>" +
+          "<td>" + esc(f.domain || f.sni || f.dst_ip) + "<span class='muted'>:" + (f.dst_port || "") + "</span></td>" +
+          "<td>" + (f.category ? pill(f.category, "") : "<span class='muted'>&mdash;</span>") + "</td>" +
+          "<td>" + pill(f.verdict, f.verdict) + "</td>" +
+          "<td class='mono'>" + fmtBytes((f.tx_bytes || 0) + (f.rx_bytes || 0)) + "</td></tr>";
+      }).join("") : "<tr><td colspan='5' class='empty'>No flows recorded</td></tr>";
+      const dnsHtml = (d.dns || []).length ? d.dns.map(function (r) {
+        return "<tr><td class='mono muted'>" + hhmmss(r.ts) + "</td>" +
+          "<td>" + esc(r.qname) + "</td><td class='muted'>" + esc(r.qtype) + "</td>" +
+          "<td>" + (r.category ? pill(r.category, "") : "<span class='muted'>&mdash;</span>") + "</td>" +
+          "<td>" + pill(r.action, "") + "</td></tr>";
+      }).join("") : "<tr><td colspan='5' class='empty'>No DNS queries</td></tr>";
+      const actHtml = (d.activity || []).length ? d.activity.map(function (a) {
+        return "<tr><td class='mono muted'>" + hhmmss(a.ts) + "</td>" +
+          "<td><strong>" + esc(a.action) + "</strong></td>" +
+          "<td class='muted'>" + (esc(a.actor) || esc(a.actor_type)) + "</td></tr>";
+      }).join("") : "<tr><td colspan='3' class='empty'>No activity</td></tr>";
+      openDrawer(
+        '<div class="modal-head"><h2>Endpoint &middot; ' + esc(e.name) + '</h2><span class="close-x" onclick="Fabric.closeDrawer()">&times;</span></div>' +
+        '<div class="modal-body">' +
+        '<div>' + connState + " " + pill(e.status, e.status) + " " + (e.inspect_tls ? pill("inspect", "inspect") : pill("bypass", "")) + "</div>" +
+        '<h3 style="font-size:13px;margin-top:14px">Connection</h3><div class="kvgrid">' + connRows + ingRows + "</div>" +
+        '<h3 style="font-size:13px;margin-top:16px">Traffic totals</h3><div class="kvgrid">' + totalsRow + "</div>" +
+        '<h3 style="font-size:13px;margin-top:16px">Recent flows</h3><table class="data compact"><tbody>' + flowsHtml + "</tbody></table>" +
+        '<h3 style="font-size:13px;margin-top:16px">Recent DNS</h3><table class="data compact"><tbody>' + dnsHtml + "</tbody></table>" +
+        '<h3 style="font-size:13px;margin-top:16px">Activity</h3><table class="data compact"><tbody>' + actHtml + "</tbody></table>" +
+        '<div class="flex gap mt"><button class="btn sm primary" onclick="Fabric.endpointConfig(\'' + e.id + '\')">Get config</button>' +
+        '<button class="btn sm danger" onclick="Fabric.revokeEndpoint(\'' + e.id + '\')">Revoke</button></div>' +
+        "</div>"
+      );
+    }).fail(function () { toast("Could not load endpoint detail", "bad"); });
+  }
+
+  // ----------------------------------------------------------------- activity log
+  let _actTimer = null;
+  function debouncedActivity() { clearTimeout(_actTimer); _actTimer = setTimeout(loadActivity, 300); }
+  function activityRow(a) {
+    const detail = (a.detail && Object.keys(a.detail).length) ? esc(JSON.stringify(a.detail)) : "";
+    const when = a.ts ? new Date(a.ts).toLocaleString() : "";
+    return "<tr><td class='mono muted'>" + esc(when) + "</td>" +
+      "<td>" + (esc(a.actor) || "&mdash;") + "</td>" +
+      "<td>" + pill(a.actor_type || "?", "") + "</td>" +
+      "<td><strong>" + esc(a.action) + "</strong></td>" +
+      "<td class='mono muted'>" + (esc(a.target) || "&mdash;") + "</td>" +
+      "<td class='muted' style='max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>" + detail + "</td></tr>";
+  }
+  function loadActivity() {
+    const at = $("#activityActorFilter").val() || "";
+    const q = ($("#activitySearch").val() || "").trim();
+    let path = "/logs?limit=300";
+    if (at) path += "&actor_type=" + encodeURIComponent(at);
+    if (q) path += "&q=" + encodeURIComponent(q);
+    api(path).done(function (rows) {
+      $("#activityTable tbody").html(rows.map(activityRow).join("") || "<tr><td colspan='6' class='empty'>No activity yet</td></tr>");
+    });
+  }
+
   // ----------------------------------------------------------------- websocket
   function connectWS() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -899,6 +1035,10 @@
       if ($("#view-nodes").hasClass("active")) loadNodes();
     } else if (type === "policy.changed") {
       pushFeed("policy", "Policy updated &mdash; recompiling data-plane hints", "#8b5cf6");
+    } else if (type === "endpoint.state") {
+      const label = d.status === "active" ? "connected" : d.status;
+      pushFeed("endpoint", "Endpoint <strong>" + esc(d.name) + "</strong> " + pill(label, d.status), "#10b981");
+      if ($("#view-endpoints").hasClass("active")) loadEndpoints();
     }
   }
   function trim(sel, max) { const t = $(sel + " tbody"); while (t.children().length > max) t.children().last().remove(); }
@@ -914,7 +1054,7 @@
 
   // ----------------------------------------------------------------- boot
   const LOADERS = { dashboard: loadDashboard, map: function () { api("/fabric/topology").done(WorldMap.setTopology); }, nodes: loadNodes,
-    endpoints: loadEndpoints, policies: loadPolicies, flows: loadFlows, dns: loadDns, pki: loadPki };
+    endpoints: loadEndpoints, policies: loadPolicies, flows: loadFlows, dns: loadDns, activity: loadActivity, pki: loadPki };
 
   $(function () {
     WorldMap.init();
@@ -928,10 +1068,11 @@
   window.Fabric = {
     closeModal: closeModal, closeDrawer: closeDrawer, refreshAll: refreshAll, recomputeFabric: recomputeFabric,
     openNodeModal: openNodeModal, createNode: createNode, pairNode: pairNode, deleteNode: deleteNode, updateNode: updateNode, viewNodeConfig: viewNodeConfig,
-    configureNode: configureNode, saveNodeConfig: saveNodeConfig,
-    openEndpointModal: openEndpointModal, createEndpoint: createEndpoint, endpointConfig: endpointConfig, revokeEndpoint: revokeEndpoint, shareEndpoint: shareEndpoint,
+    configureNode: configureNode, saveNodeConfig: saveNodeConfig, nodeDetail: nodeDetail,
+    openEndpointModal: openEndpointModal, createEndpoint: createEndpoint, endpointConfig: endpointConfig, revokeEndpoint: revokeEndpoint, shareEndpoint: shareEndpoint, endpointDetail: endpointDetail,
     openPolicyModal: openPolicyModal, addRule: addRule, removeRule: removeRule, savePolicy: savePolicy, editPolicy: editPolicy, deletePolicy: deletePolicy, toggleAdvanced: toggleAdvanced,
     flowDetail: flowDetail, dnsDetail: dnsDetail, certDetail: certDetail,
+    loadActivity: loadActivity, debouncedActivity: debouncedActivity,
     toggleMapFlows: function (on) { WorldMap.setFlows(on); },
     copy: copy, download: download,
   };
