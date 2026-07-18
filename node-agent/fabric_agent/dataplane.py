@@ -257,6 +257,7 @@ class DataPlane:
         wan = wan or self.wan_interface()
         self.enable_ip_forward()
         self._ensure_chains()
+        self._flush_fabric_chains()
         srcs: list[str] = []
         for c in [FABRIC_CGNAT] + [x for x in (src_cidrs or []) if x]:
             if c not in srcs:
