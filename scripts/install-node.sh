@@ -49,12 +49,15 @@ if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq wireguard wireguard-tools iproute2 iptables \
-                         python3 python3-venv python3-pip git ca-certificates
+                         python3 python3-pip git curl ca-certificates
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y wireguard-tools iproute iptables python3 python3-pip git
+  dnf install -y -q wireguard-tools iproute iptables python3 python3-pip git curl ca-certificates
 else
   die "unsupported package manager (need apt-get or dnf)"
 fi
+
+command -v python3 >/dev/null 2>&1 || die "python3 not found after install"
+log "using $(python3 --version 2>&1) at $(command -v python3)"
 
 # --- fetch / update code ----------------------------------------------
 # Preferred path: download a self-contained bundle straight from the
@@ -96,11 +99,15 @@ else
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$PREFIX"
 fi
 
-# --- python venv -------------------------------------------------------
-log "creating virtualenv"
-python3 -m venv "$PREFIX/node-agent/.venv"
-"$PREFIX/node-agent/.venv/bin/pip" install --upgrade pip -q
-"$PREFIX/node-agent/.venv/bin/pip" install -q -r "$PREFIX/node-agent/requirements.txt"
+# --- python dependencies (system interpreter, no venv) -----------------
+# Respect PEP 668 "externally-managed" environments without a venv.
+PIP_FLAGS=(--upgrade)
+if python3 -m pip install --help 2>/dev/null | grep -q break-system-packages; then
+  PIP_FLAGS+=(--break-system-packages)
+fi
+log "installing python dependencies (system-wide, no venv)"
+python3 -m pip install "${PIP_FLAGS[@]}" -q pip
+python3 -m pip install "${PIP_FLAGS[@]}" -q -r "$PREFIX/node-agent/requirements.txt"
 
 # --- state + config ----------------------------------------------------
 mkdir -p "$STATE_DIR" /etc/fabric
@@ -123,4 +130,10 @@ install -m 644 "$PREFIX/deploy/systemd/fabric-agent.service" /etc/systemd/system
 systemctl daemon-reload
 systemctl enable --now fabric-agent.service
 
-log "done. node is enrolling — follow logs with:  journalctl -u fabric-agent -f"
+if systemctl is-active --quiet fabric-agent.service; then
+  log "fabric-agent.service is running — node is enrolling"
+else
+  err "service did not become active — check: journalctl -u fabric-agent -e"
+fi
+
+log "done. follow enrollment with:  journalctl -u fabric-agent -f"

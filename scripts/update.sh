@@ -30,17 +30,21 @@ else
 fi
 
 restart_if_active() {
-  local unit="$1" reqs="$2" venv="$3"
+  local unit="$1" reqs="$2"
   if systemctl list-unit-files | grep -q "^$unit"; then
     log "refreshing deps for $unit"
-    "$venv/bin/pip" install -q --upgrade pip
-    "$venv/bin/pip" install -q -r "$reqs"
+    local pip_flags=(--upgrade)
+    if python3 -m pip install --help 2>/dev/null | grep -q break-system-packages; then
+      pip_flags+=(--break-system-packages)
+    fi
+    python3 -m pip install -q "${pip_flags[@]}" pip
+    python3 -m pip install -q "${pip_flags[@]}" -r "$reqs"
     log "restarting $unit"
     systemctl restart "$unit"
   fi
 }
 
-restart_if_active "fabric-management.service" "$PREFIX/management/requirements.txt" "$PREFIX/management/.venv"
-restart_if_active "fabric-agent.service"      "$PREFIX/node-agent/requirements.txt" "$PREFIX/node-agent/.venv"
+restart_if_active "fabric-management.service" "$PREFIX/management/requirements.txt"
+restart_if_active "fabric-agent.service"      "$PREFIX/node-agent/requirements.txt"
 
 log "update complete"

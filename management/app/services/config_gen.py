@@ -42,14 +42,24 @@ def render_wireguard_conf(endpoint: Endpoint, ingress: Node, private_key: str) -
 
 
 def _qr_png_b64(text: str) -> str:
+    """Render a QR code as base64 PNG.
+
+    Prefers the pure-Python ``pypng`` backend so no Pillow / C build is needed;
+    falls back to Pillow if it happens to be installed. QR is purely cosmetic —
+    if neither backend is present we return "" and the caller hides the image.
+    """
     try:
         import qrcode
-        img = qrcode.make(text)
+        try:
+            from qrcode.image.pure import PyPNGImage
+            img = qrcode.make(text, image_factory=PyPNGImage)
+        except Exception:
+            img = qrcode.make(text)  # Pillow backend if available
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        img.save(buf)
         return base64.b64encode(buf.getvalue()).decode()
     except Exception:
-        # qrcode/Pillow not available — QR is optional, config still works.
+        # QR backend not available — QR is optional, config still works.
         return ""
 
 

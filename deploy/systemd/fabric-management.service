@@ -10,7 +10,7 @@ User=fabric
 Group=fabric
 EnvironmentFile=/etc/fabric/management.env
 WorkingDirectory=/opt/fabric/management
-ExecStart=/opt/fabric/management/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --proxy-headers --forwarded-allow-ips=*
+ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8080 --proxy-headers --forwarded-allow-ips=*
 Restart=always
 RestartSec=5
 StateDirectory=fabric

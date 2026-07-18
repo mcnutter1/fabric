@@ -37,7 +37,7 @@ sudo certbot --nginx -d fabric.mcnutt.cloud
 Seed the starter fabric (creates nodes + default policy + bootstraps PKI):
 
 ```bash
-cd /opt/fabric/management && sudo -u fabric .venv/bin/python -m app.seed
+cd /opt/fabric/management && sudo -u fabric python3 -m app.seed
 ```
 
 > Back up `FABRIC_PKI_PASSPHRASE`, `FABRIC_SESSION_SECRET`, and
@@ -125,7 +125,7 @@ journalctl -u fabric-management -f
 journalctl -u fabric-agent -f
 wg show fab0
 ip rule ; ip route show table 51820
-sudo -u fabric /opt/fabric/management/.venv/bin/python -m app.seed   # idempotent re-seed
+cd /opt/fabric/management && sudo -u fabric python3 -m app.seed   # idempotent re-seed
 ```
 
 ## Backups
