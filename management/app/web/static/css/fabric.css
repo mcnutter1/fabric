@@ -151,6 +151,39 @@ tr.clickable:hover { background: rgba(59,130,246,.08); }
 .hop-sub { font-size: 11px; margin-top: 3px; }
 .hop-arrow { display: flex; align-items: center; color: var(--accent); font-size: 20px; padding: 0 2px; }
 
+/* ---------- Connection summary + journey timeline (flow drill-down) ---------- */
+.connsum { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px;
+  padding: 9px 12px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px; }
+.connsum .cs-ip { font-size: 13px; }
+.connsum .cs-arrow { color: var(--accent); font-size: 15px; }
+.connsum .cs-proto { font-size: 10px; padding: 2px 8px; border-radius: 999px; background: var(--accent);
+  color: #fff; text-transform: uppercase; letter-spacing: .5px; }
+.connsum .cs-bytes { margin-left: auto; font-size: 12px; color: var(--text-dim); }
+
+.journey { margin-top: 8px; }
+.jhop { display: flex; gap: 12px; align-items: flex-start; padding: 6px; border-radius: 10px;
+  border: 1px solid transparent; transition: background .12s, border-color .12s; }
+.jhop.jhop-node { cursor: pointer; }
+.jhop.jhop-node:hover { background: var(--bg-elev); border-color: var(--border); }
+.jdot { flex: 0 0 40px; width: 40px; height: 40px; border-radius: 11px; display: flex; align-items: center;
+  justify-content: center; font-size: 20px; background: var(--bg-elev-2); border: 1px solid var(--border); }
+.jdot-endpoint { border-color: var(--accent); }
+.jdot-ingress { border-color: var(--accent-2); }
+.jdot-connector, .jdot-private { border-color: var(--purple); }
+.jdot-egress, .jdot-internet { border-color: var(--warn); }
+.jbody { flex: 1; min-width: 0; padding-top: 1px; }
+.jkind { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); }
+.jgo { color: var(--accent); text-transform: none; letter-spacing: 0; font-weight: 600; }
+.jname { font-size: 14px; font-weight: 600; word-break: break-word; }
+.jmeta { font-size: 12px; color: var(--text-dim); margin-top: 2px; word-break: break-all; }
+.jchips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.jchip { font-size: 10px; padding: 2px 7px; border-radius: 999px; background: var(--bg-elev);
+  border: 1px solid var(--border); color: var(--text-dim); }
+.jseg { display: flex; align-items: center; gap: 8px; margin-left: 26px; padding: 3px 0; }
+.jseg::before { content: ""; width: 2px; height: 20px; border-radius: 2px;
+  background: linear-gradient(var(--accent-2), var(--purple)); }
+.jseg-label { font-size: 11px; color: var(--text-faint); }
+
 /* ---------- Key/value grid (drill-down) ---------- */
 .kvgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 16px; margin-top: 8px; }
 .kv { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); }

@@ -604,15 +604,52 @@
       "<td class='mono'>" + fmtBytes(f.tx_bytes + f.rx_bytes) + "</td></tr>";
   }
   const HOP_ICON = { endpoint: "&#128241;", ingress: "&#128274;", egress: "&#127760;", connector: "&#127970;", internet: "&#127760;", private: "&#127970;" };
-  function flowPathHtml(path) {
-    return (path || []).map(function (h, i) {
-      const arrow = i < path.length - 1 ? '<div class="hop-arrow">&rarr;</div>' : "";
-      const sub = [h.detail, h.region, h.country, h.user, h.os].filter(Boolean).map(esc).join(" &middot; ");
-      return '<div class="hop"><div class="hop-ic">' + (HOP_ICON[h.kind] || "&#8226;") + "</div>" +
-        '<div class="hop-label">' + esc(h.label) + "</div>" +
-        '<div class="hop-name">' + esc(h.name || "") + "</div>" +
-        (sub ? '<div class="hop-sub muted">' + sub + "</div>" : "") + "</div>" + arrow;
-    }).join("");
+  // Label the transport between two adjacent hops: intra-fabric legs are
+  // encrypted WireGuard; the final leg to the destination is the real L4.
+  function segLabel(a, b, f) {
+    if (b.kind === "internet" || b.kind === "private") {
+      const proto = (f.protocol || "").toUpperCase() || "IP";
+      const port = f.dst_port ? ":" + f.dst_port : "";
+      let t = proto + port;
+      if (b.kind === "internet" && f.egress_ip) t += " &middot; NAT " + f.egress_ip;
+      if (b.kind === "private") t += " &middot; masqueraded";
+      return t;
+    }
+    return "WireGuard &middot; encrypted";
+  }
+  function connSummary(f) {
+    const dst = (f.dst_ip || f.domain || f.sni || "") + (f.dst_port ? ":" + f.dst_port : "");
+    return '<div class="connsum">' +
+      '<span class="cs-ip mono">' + (esc(f.src_ip) || "client") + "</span>" +
+      '<span class="cs-arrow">&rarr;</span>' +
+      '<span class="cs-ip mono">' + (esc(dst) || "&mdash;") + "</span>" +
+      '<span class="cs-proto">' + ((esc((f.protocol || "").toUpperCase())) || "IP") + "</span>" +
+      '<span class="cs-bytes mono">&uarr; ' + fmtBytes(f.tx_bytes) + " &darr; " + fmtBytes(f.rx_bytes) + "</span>" +
+      "</div>";
+  }
+  function flowJourney(path, f) {
+    path = path || [];
+    let out = "";
+    for (let i = 0; i < path.length; i++) {
+      const h = path[i];
+      const isNode = !!h.node_id;
+      const cls = "jhop jhop-" + h.kind + (isNode ? " jhop-node clickable" : "");
+      const open = isNode ? " onclick=\"Fabric.nodeDetail('" + esc(h.node_id) + "')\"" : "";
+      const chips = [];
+      (h.roles || []).forEach(function (r) { chips.push(esc(r)); });
+      [h.status, h.region, h.public_endpoint || h.hostname, h.os, h.user, h.isp, h.country].forEach(function (v) {
+        if (v) chips.push(esc(v));
+      });
+      const chipHtml = chips.length ? '<div class="jchips">' + chips.map(function (c) { return '<span class="jchip">' + c + "</span>"; }).join("") + "</div>" : "";
+      const detail = h.detail ? '<div class="jmeta mono">' + esc(h.detail) + "</div>" : "";
+      out += '<div class="' + cls + '"' + open + '><div class="jdot jdot-' + h.kind + '">' + (HOP_ICON[h.kind] || "&#8226;") + "</div>" +
+        '<div class="jbody"><div class="jkind">' + esc(h.label) + (isNode ? ' <span class="jgo">view &rarr;</span>' : "") + "</div>" +
+        '<div class="jname">' + esc(h.name || "") + "</div>" + detail + chipHtml + "</div></div>";
+      if (i < path.length - 1) {
+        out += '<div class="jseg"><span class="jseg-label">' + segLabel(h, path[i + 1], f) + "</span></div>";
+      }
+    }
+    return out;
   }
   function kv(label, val) {
     if (val === undefined || val === null || val === "") return "";
@@ -635,7 +672,8 @@
         '<div class="modal-head"><h2>Flow &middot; ' + esc(f.domain || f.sni || f.dst_ip) + '</h2><span class="close-x" onclick="Fabric.closeDrawer()">&times;</span></div>' +
         '<div class="modal-body">' +
         '<div class="flex" style="justify-content:space-between;align-items:center"><div>' + pill(f.verdict, f.verdict) + " " + (f.category ? pill(f.category, "") : "") + '</div><div class="muted mono">' + hhmmss(f.ts) + "</div></div>" +
-        '<h3 style="font-size:13px;margin-top:14px">Path traversed</h3><div class="hoppath">' + flowPathHtml(f.path) + "</div>" +
+        '<h3 style="font-size:13px;margin-top:14px">Connection</h3>' + connSummary(f) +
+        '<h3 style="font-size:13px;margin-top:16px">Path traversed</h3><div class="journey">' + flowJourney(f.path, f) + "</div>" +
         '<h3 style="font-size:13px;margin-top:16px">Heuristics</h3><div class="kvgrid">' + (heur || '<span class="muted">No deep heuristics</span>') + "</div>" +
         '<h3 style="font-size:13px;margin-top:16px">Network</h3><div class="kvgrid">' + net + "</div>" +
         payload +

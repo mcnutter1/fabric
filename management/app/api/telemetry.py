@@ -162,6 +162,8 @@ def flow_detail(flow_id: int, db: Session = Depends(get_db), _: Principal = Depe
             "kind": kind, "label": label, "node_id": node.id, "name": node.name,
             "roles": node.roles or [], "region": node.region or "",
             "public_endpoint": node.public_endpoint or "",
+            "status": getattr(node, "status", "") or "",
+            "hostname": getattr(node, "hostname", "") or "",
         }
 
     hops: list[dict] = []
