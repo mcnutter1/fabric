@@ -105,23 +105,58 @@ def diagnose_redirect(payload_raw: str, sig: str) -> dict[str, Any]:
     Never includes the app secret. Shows which (if any) signing convention
     reproduces the received signature.
     """
+    secret = settings.auth_app_secret or ""
     report: dict[str, Any] = {
         "app_id": settings.auth_app_id,
-        "app_secret_set": bool(settings.auth_app_secret),
-        "app_secret_len": len(settings.auth_app_secret or ""),
+        "app_secret_set": bool(secret),
+        "app_secret_len": len(secret),
+        "app_secret_stripped_len": len(secret.strip()),
+        "app_secret_has_edge_whitespace": secret != secret.strip(),
+        # Fingerprint lets you compare against the server's secret WITHOUT
+        # revealing either value. Same secret -> same fingerprint.
+        "app_secret_sha256_12": hashlib.sha256(secret.encode()).hexdigest()[:12],
+        "app_secret_stripped_sha256_12": hashlib.sha256(secret.strip().encode()).hexdigest()[:12],
         "payload_len": len(payload_raw),
         "sig_received": sig,
         "sig_received_len": len(sig),
         "matched_variant": None,
+        "matched_key": None,
         "variants": {},
+        "key_variants": {},
     }
+
+    # 1) Which message encoding? (key held constant = configured secret)
     for label, candidate in signature_candidates(payload_raw).items():
         computed = hmac_sign(candidate)
         match = hmac.compare_digest(computed, sig)
         report["variants"][label] = {"sig": computed, "match": match}
         if match and report["matched_variant"] is None:
             report["matched_variant"] = label
+
+    # 2) Which key derivation? (message held constant = raw payload string)
+    def _hmac_with(key: bytes) -> str:
+        return b64url_encode(hmac.new(key, payload_raw.encode(), hashlib.sha256).digest())
+
+    key_forms: dict[str, bytes] = {"utf8": secret.encode(), "utf8_stripped": secret.strip().encode()}
+    for name, raw in (("b64", secret), ("b64url", secret), ("hex", secret)):
+        try:
+            if name == "hex":
+                key_forms["hex_decoded"] = bytes.fromhex(secret.strip())
+            elif name == "b64":
+                key_forms["b64_decoded"] = base64.b64decode(secret.strip() + "=" * (-len(secret.strip()) % 4))
+            else:
+                key_forms["b64url_decoded"] = b64url_decode(secret.strip())
+        except Exception:  # noqa: BLE001
+            pass
+    for name, key in key_forms.items():
+        computed = _hmac_with(key)
+        match = hmac.compare_digest(computed, sig)
+        report["key_variants"][name] = {"sig": computed, "match": match}
+        if match and report["matched_key"] is None:
+            report["matched_key"] = name
+
     return report
+
 
 
 
