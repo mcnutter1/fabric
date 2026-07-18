@@ -15,7 +15,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.get("/login")
 async def login(request: Request):
     """Kick off SSO by redirecting to the central login UI with our callback."""
-    callback = f"{settings.public_url}/auth/callback"
+    callback = f"{settings.public_url}/api/v1/auth/callback"
     url = (
         f"{settings.auth_login_base}/?app_id={settings.auth_app_id}"
         f"&return_url={callback}"
@@ -29,16 +29,16 @@ async def callback(request: Request):
     payload_raw = request.query_params.get("payload")
     sig = request.query_params.get("sig")
     if not payload_raw or not sig:
-        return RedirectResponse("/auth/denied")
+        return RedirectResponse("/api/v1/auth/denied")
 
     import json
     try:
         payload = json.loads(payload_raw)
     except ValueError:
-        return RedirectResponse("/auth/denied")
+        return RedirectResponse("/api/v1/auth/denied")
 
     if not mcnutt.verify_hmac(mcnutt.canonical_json(payload), sig):
-        return RedirectResponse("/auth/denied")
+        return RedirectResponse("/api/v1/auth/denied")
 
     principal = Principal.from_payload(payload)
     cookie = issue_session_cookie(principal)
