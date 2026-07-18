@@ -54,15 +54,26 @@ async def callback(request: Request):
         return RedirectResponse("/api/v1/auth/denied")
 
     principal = Principal.from_payload(payload)
-    cookie = issue_session_cookie(principal)
-    resp = RedirectResponse("/")
-    resp.set_cookie(
-        settings.auth_cookie_name, cookie,
-        max_age=settings.auth_ttl_sec, httponly=True,
-        samesite="lax", secure=not settings.is_dev,
-        domain=settings.auth_cookie_domain if not settings.is_dev else None,
-    )
-    return resp
+    try:
+        cookie = issue_session_cookie(principal)
+        resp = RedirectResponse("/")
+        resp.set_cookie(
+            settings.auth_cookie_name, cookie,
+            max_age=settings.auth_ttl_sec, httponly=True,
+            samesite="lax", secure=not settings.is_dev,
+            domain=settings.auth_cookie_domain if not settings.is_dev else None,
+        )
+        return resp
+    except Exception:  # noqa: BLE001
+        import traceback
+        tb = traceback.format_exc()
+        log.error("SSO callback failed after verification: %s", tb)
+        if settings.is_dev or settings.auth_debug:
+            return JSONResponse(
+                {"ok": False, "reason": "session_error", "traceback": tb},
+                status_code=500,
+            )
+        raise
 
 
 @router.get("/denied")
