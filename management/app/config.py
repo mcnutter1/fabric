@@ -4,6 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,7 +18,11 @@ class Settings(BaseSettings):
 
     # Core
     env: str = "dev"
-    secret_key: str = "change-me-in-production-please-32bytes-min"
+    # Accept the legacy FABRIC_SESSION_SECRET name written by older installers.
+    secret_key: str = Field(
+        default="change-me-in-production-please-32bytes-min",
+        validation_alias=AliasChoices("FABRIC_SECRET_KEY", "FABRIC_SESSION_SECRET"),
+    )
     public_url: str = "http://localhost:8080"
     domain: str = "fabric.mcnutt.cloud"
 
@@ -27,15 +32,28 @@ class Settings(BaseSettings):
     # Realtime
     eventbus_url: str = "inproc"
 
-    # Auth (McNutt Cloud)
-    auth_login_base: str = "https://login.mcnutt.cloud"
-    auth_app_id: str = "fabric-console"
-    auth_app_secret: str = "replace_with_strong_shared_secret"
+    # Auth (McNutt Cloud). validation_alias also accepts the legacy
+    # FABRIC_MCNUTT_* names emitted by earlier installer versions.
+    auth_login_base: str = Field(
+        default="https://login.mcnutt.cloud",
+        validation_alias=AliasChoices("FABRIC_AUTH_LOGIN_BASE", "FABRIC_MCNUTT_BASE_URL"),
+    )
+    auth_app_id: str = Field(
+        default="fabric-console",
+        validation_alias=AliasChoices("FABRIC_AUTH_APP_ID", "FABRIC_MCNUTT_APP_ID"),
+    )
+    auth_app_secret: str = Field(
+        default="replace_with_strong_shared_secret",
+        validation_alias=AliasChoices("FABRIC_AUTH_APP_SECRET", "FABRIC_MCNUTT_APP_SECRET"),
+    )
     auth_cookie_name: str = "fabric_auth"
     auth_cookie_domain: str = ".mcnutt.cloud"
     auth_ttl_sec: int = 7200
     auth_refresh_sec: int = 1200
     auth_admin_roles: str = "admin,fabric_admin"
+    # When true, the SSO callback returns a detailed (secret-free) diagnostic in
+    # the HTTP response instead of a plain redirect. For troubleshooting only.
+    auth_debug: bool = False
 
     # PKI
     pki_passphrase: str = "change-me-pki-passphrase"
