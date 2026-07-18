@@ -36,10 +36,12 @@ class DataPlane:
         existing = s.run(["ip", "link", "show", "dev", self.iface], capture=True)
         if not existing:
             s.run(["ip", "link", "add", "dev", self.iface, "type", "wireguard"])
-        # Sync configuration (strip wg-quick-only keys for `wg setconf`).
+        # Sync configuration (strip wg-quick-only keys for `wg syncconf`). Feed
+        # the config to wg over stdin rather than a temp file path, so it never
+        # depends on the setconf file's ownership/permissions.
         stripped = self._strip_for_setconf(conf_path)
         if stripped:
-            s.run(["wg", "syncconf", self.iface, stripped])
+            s.run(["wg", "syncconf", self.iface, "/dev/stdin"], input=stripped)
         # Address + up.
         # (Address lines are applied explicitly below by the caller via set_address.)
         s.run(["ip", "link", "set", "up", "dev", self.iface])
@@ -50,8 +52,9 @@ class DataPlane:
         self.sys.run(["ip", "address", "replace", cidr, "dev", self.iface])
 
     def _strip_for_setconf(self, conf_path):
-        """wg setconf/syncconf rejects wg-quick keys (Address/Table). Emit a temp
-        file with only [Interface]/[Peer] cryptographic keys."""
+        """wg setconf/syncconf rejects wg-quick keys (Address/Table). Return a
+        config string with only [Interface]/[Peer] cryptographic keys, suitable
+        for feeding to `wg syncconf` over stdin."""
         try:
             text = conf_path.read_text()
         except Exception:
@@ -73,9 +76,7 @@ class DataPlane:
                 out.append(line)
             elif section == "peer" and key in keep_peer:
                 out.append(line)
-        tmp = conf_path.with_suffix(".setconf")
-        tmp.write_text("\n".join(out) + "\n")
-        return str(tmp)
+        return "\n".join(out) + "\n"
 
     # ------------------------------------------------------------ routing
     def apply_routing(self, routing: dict) -> None:

@@ -20,7 +20,8 @@ class System:
     def have(self, tool: str) -> bool:
         return shutil.which(tool) is not None
 
-    def run(self, args: list[str], check: bool = False, capture: bool = False) -> Optional[str]:
+    def run(self, args: list[str], check: bool = False, capture: bool = False,
+            input: Optional[str] = None) -> Optional[str]:
         cmd = " ".join(args)
         if self.dry_run or not self.have(args[0]):
             reason = "dry-run" if self.dry_run else f"'{args[0]}' not found"
@@ -28,7 +29,7 @@ class System:
             return "" if capture else None
         try:
             res = subprocess.run(
-                args, check=check, text=True,
+                args, check=check, text=True, input=input,
                 stdout=subprocess.PIPE if capture else None,
                 stderr=subprocess.PIPE,
             )
