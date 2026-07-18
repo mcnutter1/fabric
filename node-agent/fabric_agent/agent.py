@@ -224,10 +224,15 @@ class FabricAgent:
         """Run the in-package updater when the manager asks.
 
         The updater downloads the latest bundle and restarts fabric-agent. It
-        MUST run outside this service's cgroup, otherwise `systemctl restart
-        fabric-agent` (performed by the updater) would kill the updater
-        mid-flight. We use `systemd-run --scope` for that isolation, falling
-        back to a detached subprocess when systemd-run isn't available.
+        MUST run fully detached from this service, otherwise the `systemctl
+        restart fabric-agent` it performs would tear the updater down
+        mid-flight (before it can write its result) — which manifests as an
+        update that dispatches but never reports back.
+
+        We launch it as an independent *transient systemd service* (parented to
+        PID 1, in its own cgroup), so restarting fabric-agent cannot touch it.
+        Its output lands in the journal under `fabric-self-update.service`.
+        Falls back to a detached subprocess when systemd-run isn't available.
 
         Running through the package updater (not the raw shell script) means the
         outcome is written to state_dir/last-update.json, which the freshly
@@ -242,12 +247,28 @@ class FabricAgent:
         log.info("update requested by manager; launching self-update")
         try:
             if shutil.which("systemd-run"):
-                subprocess.Popen(
-                    ["systemd-run", "--scope", "--quiet",
-                     "--collect", f"--setenv=PYTHONPATH={agent_dir}"] + update_cmd,
+                # Clear any stale unit from a prior run so the name is reusable.
+                subprocess.run(
+                    ["systemctl", "reset-failed", "fabric-self-update.service"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    start_new_session=True,
+                    check=False,
                 )
+                cmd = [
+                    "systemd-run",
+                    "--unit=fabric-self-update",
+                    "--collect",
+                    f"--setenv=PYTHONPATH={agent_dir}",
+                ] + update_cmd
+                # systemd-run returns as soon as the transient unit is started,
+                # so this call is non-blocking; a non-zero rc means dispatch
+                # itself failed (e.g. D-Bus/permission), which we surface.
+                res = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, text=True)
+                if res.returncode != 0:
+                    log.warning("self-update dispatch failed (rc=%s): %s",
+                                res.returncode, (res.stdout or "").strip())
+                else:
+                    log.info("self-update running as fabric-self-update.service")
             else:
                 env = {**os.environ, "PYTHONPATH": agent_dir}
                 subprocess.Popen(update_cmd, cwd=agent_dir, env=env,
