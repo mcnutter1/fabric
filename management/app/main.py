@@ -177,8 +177,7 @@ def create_app() -> FastAPI:
             if exp is not None and exp.tzinfo is None:
                 exp = exp.replace(tzinfo=_dt.timezone.utc)
             expires_human = _human_expiry(exp)
-            return templates.TemplateResponse("provision.html", {
-                "request": request,
+            return templates.TemplateResponse(request, "provision.html", {
                 "endpoint_name": ep.name,
                 "protocol": bundle.protocol,
                 "os": bundle.os,
@@ -203,8 +202,7 @@ def create_app() -> FastAPI:
         user = principal.to_dict() if principal else {
             "name": "Local Admin", "email": "admin@local", "roles": ["admin"], "uid": "local", "username": "local",
         }
-        return templates.TemplateResponse("console.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "console.html", {
             "user": user,
             "is_admin": principal.is_admin if principal else True,
             "domain": settings.domain,
