@@ -69,6 +69,62 @@ def verify_redirect_payload(payload_raw: str, sig: str) -> Optional[dict]:
     return None
 
 
+def signature_candidates(payload_raw: str) -> dict[str, str]:
+    """Return a set of candidate signing strings for diagnostics.
+
+    Maps a human label to the exact string variant; the caller can HMAC each and
+    compare against the received signature to discover the server's convention.
+    """
+    variants: dict[str, str] = {"raw_query": payload_raw}
+    try:
+        payload = json.loads(payload_raw)
+    except ValueError:
+        return variants
+    variants["compact_ascii"] = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+    variants["compact_unicode"] = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    variants["compact_ascii_slashesc"] = json.dumps(
+        payload, separators=(",", ":"), ensure_ascii=True
+    ).replace("/", "\\/")
+    variants["compact_unicode_slashesc"] = json.dumps(
+        payload, separators=(",", ":"), ensure_ascii=False
+    ).replace("/", "\\/")
+    variants["py_default"] = json.dumps(payload)  # ", " / ": " spacing, ascii
+    variants["sorted_ascii"] = json.dumps(
+        payload, separators=(",", ":"), ensure_ascii=True, sort_keys=True
+    )
+    try:
+        variants["b64url_decoded"] = b64url_decode(payload_raw).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        pass
+    return variants
+
+
+def diagnose_redirect(payload_raw: str, sig: str) -> dict[str, Any]:
+    """Build a redacted diagnostic report for a failing SSO redirect.
+
+    Never includes the app secret. Shows which (if any) signing convention
+    reproduces the received signature.
+    """
+    report: dict[str, Any] = {
+        "app_id": settings.auth_app_id,
+        "app_secret_set": bool(settings.auth_app_secret),
+        "app_secret_len": len(settings.auth_app_secret or ""),
+        "payload_len": len(payload_raw),
+        "sig_received": sig,
+        "sig_received_len": len(sig),
+        "matched_variant": None,
+        "variants": {},
+    }
+    for label, candidate in signature_candidates(payload_raw).items():
+        computed = hmac_sign(candidate)
+        match = hmac.compare_digest(computed, sig)
+        report["variants"][label] = {"sig": computed, "match": match}
+        if match and report["matched_variant"] is None:
+            report["matched_variant"] = label
+    return report
+
+
+
 
 async def validate_session_token(token: str, client_ip: str = "") -> Optional[dict]:
     """Validate an SSO session token via /api/validate.php.

@@ -42,9 +42,13 @@ async def callback(request: Request):
 
     payload = mcnutt.verify_redirect_payload(payload_raw, sig)
     if payload is None:
-        log.warning("SSO callback signature verification failed for app_id=%s",
-                    settings.auth_app_id)
-        return RedirectResponse("/api/v1/auth/denied")
+        report = mcnutt.diagnose_redirect(payload_raw, sig)
+        log.warning("SSO callback signature verification FAILED: %s", report)
+        # Return the (secret-free) diagnostic so it can be copied for support.
+        return JSONResponse(
+            {"ok": False, "reason": "access_denied", "diagnostic": report},
+            status_code=403,
+        )
 
     principal = Principal.from_payload(payload)
     cookie = issue_session_cookie(principal)
