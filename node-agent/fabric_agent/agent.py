@@ -139,7 +139,10 @@ class FabricAgent:
     def _link_stats(self) -> list[dict]:
         """Build per-peer link stats from `wg show` keyed back to node_ids."""
         cfg = self.manager.get_config()
-        pub_to_node = {p["public_key"]: p["node_id"] for p in cfg.get("peers", []) if p.get("public_key")}
+        # Only fabric-node peers carry a node_id; client endpoint peers don't and
+        # report their own stats separately, so skip them here.
+        pub_to_node = {p["public_key"]: p["node_id"] for p in cfg.get("peers", [])
+                       if p.get("public_key") and p.get("node_id")}
         raw = self.dp.wg_link_stats()
         now = int(time.time())
         links = []
